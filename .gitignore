@@ -1,0 +1,30 @@
+# Embedded checkout (keeps its own .git / .venv)
+mini-swe-agent/
+
+# Vendored upstream clone (development-time API reference only; never committed)
+integration/tencentdb/src/TencentDB-Agent-Memory/
+
+# Secrets
+.env
+
+# Run outputs
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+
+# instance-ids
+instance-ids.txt
+instance-ids-*.txt
+
+# .DS_Store
+.DS_Store
+
+# claude
+.claude/

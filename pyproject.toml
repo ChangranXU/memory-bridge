@@ -1,0 +1,38 @@
+# Shared uv environment for everything in this workspace except mini-swe-agent
+# itself (which keeps its own .venv). `uv sync` at this root installs the
+# workspace members (shared-bridge, integration/cure_memory, integration/mem0,
+# integration/tencentdb)
+# editable, plus mini-swe-agent (editable path dependency) and the litellm
+# proxy extras that the model lanes need at run time.
+[project]
+name = "memory-bridge"
+version = "0.1.0"
+description = "Shared environment for the memory bridge workspace (shared-bridge + memory integrations)."
+requires-python = ">=3.10"
+dependencies = [
+    "shared-bridge",
+    "cure-memory-bridge",
+    "mem0-bridge",
+    "tencentdb-bridge",
+    "mini-swe-agent",
+    # mini-swe-agent imports LiteLLM proxy dependencies during model calls but
+    # does not install them; without this the first model request dies with
+    # e.g. ModuleNotFoundError: No module named 'fastapi'.
+    "litellm[proxy]",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["shared-bridge", "integration/cure_memory", "integration/mem0", "integration/tencentdb"]
+
+[tool.uv.sources]
+shared-bridge = { workspace = true }
+cure-memory-bridge = { workspace = true }
+mem0-bridge = { workspace = true }
+tencentdb-bridge = { workspace = true }
+mini-swe-agent = { path = "mini-swe-agent", editable = true }
+
+[dependency-groups]
+dev = ["pytest"]

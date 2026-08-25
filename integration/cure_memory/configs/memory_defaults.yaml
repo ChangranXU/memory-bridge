@@ -1,0 +1,40 @@
+# CURE automatic-extraction overlay — pass AFTER the stock config:
+#   --config swebench.yaml --config .../configs/memory_defaults.yaml \
+#   --config agent.memory.enabled=true --config agent.memory.output_dir=<dir>
+# PARTIAL overlay: only the agent.memory.* subtree. No model.model_class —
+# the stock LitellmModel runs in both arms.
+agent:
+  memory:
+    enabled: false          # on/off switch; flip via --config agent.memory.enabled=true
+    scope: run              # run | instance
+    max_message_chars: 4000
+    extract_every_n_steps: 10
+    extract_max_tokens: 1600
+    extract_reasoning_effort: low
+    extract_max_consecutive_errors: 3
+    # Extraction policy/guidelines ("" -> the shared default text in
+    # shared_bridge/prompts.py, appended into the CURE policy prompt;
+    # non-empty = this run's override, replacing the default wholesale).
+    extraction_guidelines: ""
+    inject_recall: true
+    max_memories: 10
+    # Host-side recall render budgets over the memory lines (native kin:
+    # recall.maxCharsPerMemory / recall.maxTotalRecallChars). The per-line
+    # cap stays off (the native default); the 2000-char total preserves the
+    # shipped arm bound.
+    max_total_recall_chars: 2000
+    max_chars_per_memory: 0
+    # Relevance floor on the native term-overlap score (an unbounded
+    # term-count scale): the native search already drops zero-overlap rows,
+    # so 1 would be a no-op and 2 is the first real knob — a hypothesis to
+    # measure, not a truth.
+    recall_min_score: 2
+    # Recall-query rewriter via the QUERY proxy lane (the driver exports
+    # MEMORY_QUERY_* per instance; the lane shares the flat BASE_URL).
+    rewrite_every_n_steps: 10
+    annotate: true
+    annotate_main_url: ""
+    annotate_memory_url: ""
+    annotate_timeout: 0.5
+    annotate_retries: 1
+    annotate_max_consecutive_errors: 3

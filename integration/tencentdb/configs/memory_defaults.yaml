@@ -1,0 +1,56 @@
+# Partial agent.memory.* overlay for the tencentdb arm, layered after the
+# swebench.yaml config by utils/run-memory-arm.sh. recall_min_score stays
+# unset (None): L1's native score is not one scale across retrieval
+# strategies (a healthy hybrid lane yields tiny RRF ranks, an FTS-only lane
+# a normalized bm25 in (0,1), a vector-only lane cosine similarity — lane
+# availability is per-query and the response carries no strategy field), so
+# a floor would keep/drop hits by whichever lane answered, not by relevance
+# (a configured one draws one start-time warning); never inherit mem0's 0.1
+# floor.
+agent:
+  memory:
+    enabled: false
+    scope: run
+    max_message_chars: 4000
+    extract_every_n_steps: 10
+    extract_max_consecutive_errors: 3
+    extraction_guidelines: ""
+    inject_recall: true
+    max_memories: 10
+    # Host-side recall render budgets (native kin: MemoryCore's
+    # recall.maxCharsPerMemory / recall.maxTotalRecallChars — NOT the gateway
+    # yaml's server-side recall.* section, which governs the v1 /recall route
+    # the arm never calls). Both govern L1 memory lines only: the persona
+    # pseudo-hit is budget-exempt. max_chars_per_memory 0 = off (the native
+    # default); the 2000-char total preserves the shipped arm bound.
+    max_total_recall_chars: 2000
+    max_chars_per_memory: 0
+    # The search call carries the query embedding when the vector lane is on
+    # (a slow embedding provider can push it past the shared 10 s default);
+    # a ceiling only, never a latency target.
+    search_timeout: 30
+    # L1 drain knobs — the per-tick drain must never reuse search_timeout
+    # (the L1 extraction LLM call caps at a hardcoded 180 s upstream —
+    # l1-extractor.ts — so one cycle alone routinely exceeds 10 s). One tick
+    # can chain several L1 cycles: one cycle consumes at most 10 L0 rows
+    # (upstream over-fetches 2N=20 for backlog detection), so a ~25-message
+    # tick runs 2-3 serial cycles (the last rows may ride the idle timer),
+    # and with the vector lane degraded (every embed capped at 10 s upstream)
+    # one cycle was observed up to ~185 s — a 300 s budget loses a 3-cycle
+    # chain by seconds. 600 s covers the observed worst chain with margin and
+    # costs nothing on the happy path (the wait returns as soon as the
+    # pipeline is idle); the finalize chain can require the same plus the
+    # idle wait.
+    drain_budget: 600
+    finalize_drain_budget: 600
+    # conversation/add embeds every L0 message sequentially server-side (upstream
+    # behavior); under a slow embedding provider one add can run into minutes.
+    add_timeout: 600
+    drain_interval: 1.0
+    # Conversation-search limit rendered into the header's curl guide (the
+    # native tool's and the wire schema's own default; the route caps limit
+    # at 1..100): a typical 5-hit full-content result stays under the
+    # harness's 10k observation truncation, and the accumulating episode file
+    # (/tmp/tdai-l0-searches.md) retains whatever clips.
+    conversation_search_limit: 5
+    rewrite_every_n_steps: 10

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shared-bridge"
+version = "0.1.0"
+description = "Generic memory-bridge components for mini-swe-agent benchmark runs: agent lifecycle hooks, trajectory annotation transport, and the standardized memory endpoint contract."
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    # minisweagent is imported by shared_bridge.agent at module level but is
+    # deliberately NOT declared here: it is provided by the environment that
+    # runs the agent (the workspace root project installs it editable).
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

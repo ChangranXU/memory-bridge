@@ -1,0 +1,39 @@
+# mem0 automatic-extraction overlay — pass AFTER the stock config:
+#   --config swebench.yaml --config .../configs/memory_defaults.yaml \
+#   --config agent.memory.enabled=true --config agent.memory.output_dir=<dir>
+# PARTIAL overlay: only the agent.memory.* subtree. No model.model_class —
+# the stock LitellmModel runs in both arms.
+agent:
+  memory:
+    enabled: false          # on/off switch; flip via --config agent.memory.enabled=true
+    scope: run              # run | instance
+    max_message_chars: 4000
+    extract_every_n_steps: 10
+    poll_budget: 120        # total add+poll budget: hosted extraction is async
+    extract_max_consecutive_errors: 3
+    # Extraction policy/guidelines ("" -> the shared default text in
+    # shared_bridge/prompts.py, sent as the add endpoint's advisory
+    # custom_instructions; non-empty = this run's override, replacing the
+    # default wholesale).
+    extraction_guidelines: ""
+    inject_recall: true
+    max_memories: 10
+    # Host-side recall render budgets over the memory lines (native kin:
+    # recall.maxCharsPerMemory / recall.maxTotalRecallChars). The per-line
+    # cap stays off (the native default); the 2000-char total preserves the
+    # shipped arm bound.
+    max_total_recall_chars: 2000
+    max_chars_per_memory: 0
+    infer: true             # platform-side extraction (false: verbatim storage)
+    search_threshold: 0.0   # disable the platform-side semantic cutoff; never rely on
+                            # the server default (it drifts across API versions)
+    # The single relevance door: the shared host-side floor on the platform's
+    # combined multi-signal score (0-1, present on search rows). 0.1 is the
+    # documented v3 server default — a defensible first cut, a hypothesis to
+    # measure rather than a truth. While set, the arm searches with a wider
+    # top_k so the floor has a pool to filter.
+    recall_min_score: 0.1
+    # Recall-query rewriter via the QUERY proxy lane (the driver exports
+    # MEMORY_QUERY_* per instance; the lane shares the flat BASE_URL).
+    rewrite_every_n_steps: 10
+    poll_interval: 1.0

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tencentdb-bridge"
+version = "0.1.0"
+description = "TencentDB-Agent-Memory (MemoryCore) integration for the shared memory bridge: container-backed backend/agent glue and its standardized-endpoint adapter."
+requires-python = ">=3.10"
+dependencies = ["shared-bridge", "httpx", "pyyaml"]
+
+[tool.uv.sources]
+shared-bridge = { workspace = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+# Load-bearing, not hygiene: the vendored TencentDB-Agent-Memory tree ships
+# real Python packages (sdk/memory-core/python/tencentdb_agent_memory,
+# MemoryCore/hermes-plugin/memory/memory_tencentdb) that a bare where=["src"]
+# would build into the wheel. Only the bridge package is ours.
+include = ["tencentdb_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

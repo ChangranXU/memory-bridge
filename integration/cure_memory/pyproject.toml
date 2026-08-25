@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cure-memory-bridge"
+version = "0.1.0"
+description = "CURE memory integration for the shared memory bridge: the CURE memory system, its mini-swe-agent backend/agent glue, and its standardized-endpoint adapter."
+requires-python = ">=3.10"
+dependencies = ["shared-bridge"]
+
+[tool.uv.sources]
+shared-bridge = { workspace = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

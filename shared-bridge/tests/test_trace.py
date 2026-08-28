@@ -399,8 +399,28 @@ def test_search_start_end_roundtrip(traced_backend, capture_server):
     assert item["memory"]["content"]["text"] == "alpha fact"
     fake = end_payload["extensions"]["fake"]
     assert (fake["matched"], fake["selected"], fake["rendered"], fake["budget_dropped"]) == (1, 1, 1, 0)
+    # The portable match count: the raw hit count before floor/slice/budget,
+    # with the conservative default precision (a top-k native search could
+    # have truncated the pool — the fake does not override the hook).
+    assert end_payload["matched_count"] == {"value": 1, "precision": "lower_bound"}
     # The end binds at the start cursor (capture server reports 0).
     assert end["binding"] == {"after_role_call_index": 0}
+    backend.finalize()
+
+
+def test_floor_dropped_hit_counts_in_matched_count(traced_backend, capture_server):
+    """A hit the relevance floor drops still counts in matched_count.value
+    while returned stays empty: the field decouples "what the search matched"
+    from "what policy handed back" — the recall-loss-visibility shape."""
+    backend = traced_backend(recall_min_score=0.5)
+    backend.set_task("fix the bug")
+    backend.system.hits = ["weak fact"]
+    backend.system.scores = {"weak fact": 0.1}
+    assert backend.recall_context(planned_step=1) is None
+    (end,) = capture_server.events("memory_search_end")
+    assert end["payload"]["returned"] == []
+    assert end["payload"]["extensions"]["fake"]["matched"] == 1
+    assert end["payload"]["matched_count"] == {"value": 1, "precision": "lower_bound"}
     backend.finalize()
 
 
@@ -453,6 +473,9 @@ def test_failed_search_posts_failed_end(traced_backend, capture_server):
     assert end["payload"]["status"] == "failed"
     assert end["payload"]["error_codes"] == ["RuntimeError"]
     assert end["payload"]["returned"] == []
+    # A failed search has no real match count — the placeholder 0 must not be
+    # fabricated into the portable field.
+    assert "matched_count" not in end["payload"]
     assert backend._trace.pending_search is None  # a failed search anchors nothing
     backend.finalize()
 

@@ -1006,6 +1006,16 @@ class BaseMemoryBackend(ABC):
         one delivered-line slot."""
         return False
 
+    def _matched_precision(self) -> str:
+        """Precision of the search-end ``matched_count``: whether the raw hit
+        count is the TRUE match total (``"exact"``) or a floor on it
+        (``"lower_bound"``). The base cannot know whether the native search
+        truncated internally — a top-k/limit-bounded hosted API makes the
+        total match count unknowable — so the conservative default is
+        ``"lower_bound"``; an integration whose native search is an unbounded
+        full scan (every match returned) overrides with ``"exact"``."""
+        return "lower_bound"
+
     def _origin_suffix(self, origin: str | None) -> str:
         """The provenance suffix for one rendered line. The comparison against
         the current episode's session id is base-owned (``_new_session_id``
@@ -1120,31 +1130,34 @@ class BaseMemoryBackend(ABC):
         binding = None
         if operation.cursor is not None:
             binding = {"after_role_call_index": operation.cursor}
-        end = self._event(
-            "memory_search_end",
-            {
-                "trace_session_id": trace.trace_session_id,
-                "operation_id": operation.operation_id,
-                "requested_by": "main",
-                "handled_by": "memory",
-                "status": status,
-                "returned": [
-                    {"ordinal": index, "memory": self._memory_ref(memory)}
-                    for index, memory in enumerate(rendered)
-                ],
-                "error_codes": [] if error is None else [type(error).__name__],
-                "extensions": {
-                    self._adapter_meta()["name"]: {
-                        "session_id": self._session_id,
-                        "matched": matched,
-                        "selected": selected,
-                        "rendered": len(rendered),
-                        "budget_dropped": selected - len(rendered),
-                    }
-                },
+        payload = {
+            "trace_session_id": trace.trace_session_id,
+            "operation_id": operation.operation_id,
+            "requested_by": "main",
+            "handled_by": "memory",
+            "status": status,
+            "returned": [
+                {"ordinal": index, "memory": self._memory_ref(memory)}
+                for index, memory in enumerate(rendered)
+            ],
+            "error_codes": [] if error is None else [type(error).__name__],
+            "extensions": {
+                self._adapter_meta()["name"]: {
+                    "session_id": self._session_id,
+                    "matched": matched,
+                    "selected": selected,
+                    "rendered": len(rendered),
+                    "budget_dropped": selected - len(rendered),
+                }
             },
-            binding=binding,
-        )
+        }
+        if status == "completed":
+            # The portable match count, kept apart from `returned` so analysis
+            # can tell "the system found little" from "policy dropped the
+            # rest". Only a completed search has one: the failed path's
+            # matched is a placeholder 0, not a real count.
+            payload["matched_count"] = {"value": matched, "precision": self._matched_precision()}
+        end = self._event("memory_search_end", payload, binding=binding)
         return trace.annotator.post(trace.memory_url, [end])
 
     def _recall_rendered_contained(self, token, **kwargs) -> None:

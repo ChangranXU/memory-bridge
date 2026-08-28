@@ -90,6 +90,9 @@ def test_search_start_end_roundtrip(capture_server, fake_client, traced_backend)
     assert ref["extensions"]["cure"]["key"] == "recall_key"
     cure = end_payload["extensions"]["cure"]
     assert (cure["matched"], cure["selected"], cure["rendered"], cure["budget_dropped"]) == (1, 1, 1, 0)
+    # The native search is an unbounded full scan, so len(hits) is the true
+    # match count — precision "exact", never a lower bound.
+    assert end_payload["matched_count"] == {"value": 1, "precision": "exact"}
     # The end binds at the start cursor (capture server reports 0).
     assert end["binding"] == {"after_role_call_index": 0}
     # Native-stable join: the search returns the very version generation produced.
@@ -147,6 +150,25 @@ def test_budget_drop_is_counted_not_hidden(capture_server, fake_client, traced_b
     cure = ends[-1]["payload"]["extensions"]["cure"]
     assert (cure["matched"], cure["selected"], cure["rendered"], cure["budget_dropped"]) == (2, 2, 1, 1)
     assert len(ends[-1]["payload"]["returned"]) == 1
+    # The seq-279 shape: matched 2, returned 1 — the portable field keeps the
+    # true match count visible to consumers that read returned alone.
+    assert ends[-1]["payload"]["matched_count"] == {"value": 2, "precision": "exact"}
+    backend.finalize()
+
+
+def test_floor_dropped_hit_counts_in_matched_count(capture_server, fake_client, traced_backend):
+    """The seq-214 shape: the relevance floor drops the only hit, returned
+    stays empty, and matched_count still records the match — the recall loss
+    stays visible in the trace instead of reading as "nothing matched"."""
+    backend = traced_backend(recall_min_score=2.0)
+    backend.set_task("fix the recall_key bug")
+    _seed(backend, fake_client, approved_candidate(1, "recall_key", "remembered fact xyz"))
+    # The only term of the query the row matches is "recall_key" (score 1).
+    assert backend.recall_context(planned_step=3) is None
+    (end,) = capture_server.events("memory_search_end")
+    assert end["payload"]["returned"] == []
+    assert end["payload"]["extensions"]["cure"]["selected"] == 0
+    assert end["payload"]["matched_count"] == {"value": 1, "precision": "exact"}
     backend.finalize()
 
 

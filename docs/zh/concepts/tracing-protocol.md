@@ -40,7 +40,7 @@ description: Schema-v6 memory_* 标注事件与 lane 接线方式。
 | `memory_change` | 每次存储变更 | `create` / `update` / `noop` / `delete`，对照快照审计 |
 | `memory_generate_end` | 提取结束 | 产生的引用、检查点和变更审计 |
 | `memory_search_start` | 每次原生搜索（由缓存命中的召回不发送搜索事件） | 精确的查询文本 |
-| `memory_search_end` | 每次原生搜索结束（缓存命中的召回或未追踪的 episode 不发送任何事件） | 精确的有序**已渲染**引用（floor/slice/budget 之后），`matched`/`selected`/`rendered` 计数随适配器扩展携带 |
+| `memory_search_end` | 每次原生搜索结束（缓存命中的召回或未追踪的 episode 不发送任何事件） | 精确的有序**已渲染**引用（floor/slice/budget 之后），携带可移植的 `matched_count`（`{value, precision}`——floor/slice/budget 之前的原始匹配数，仅完成的搜索携带；原生搜索为无界全量扫描时（如 CURE）为 `exact`，top-k/limit 限界的原生搜索为 `lower_bound`），`matched`/`selected`/`rendered` 计数随适配器扩展携带 |
 | `memory_delivery` | 每个放置的召回块 | 绑定到精确的 main-lane 调用，附带放置证明 |
 
 {% hint style="warning" %}

@@ -40,7 +40,7 @@ An explicit URL that does not match its lane's derived prefix disables tracing f
 | `memory_change` | Each store mutation | `create` / `update` / `noop` / `delete`, audited against snapshots |
 | `memory_generate_end` | End of extraction | Produced refs, checkpoint, and mutation audit |
 | `memory_search_start` | Each native search (a cache-served recall posts no search events) | Exact query text |
-| `memory_search_end` | End of each native search (nothing posts for a cache-served recall or an untraced episode) | Exact ordered **rendered** refs (post floor/slice/budget), with `matched`/`selected`/`rendered` counts in the adapter extensions |
+| `memory_search_end` | End of each native search (nothing posts for a cache-served recall or an untraced episode) | Exact ordered **rendered** refs (post floor/slice/budget) plus the portable `matched_count` (`{value, precision}` — the raw match count before floor/slice/budget, carried on completed searches only; `exact` where the native search is an unbounded full scan like CURE's, `lower_bound` for top-k/limit-bounded native searches), with `matched`/`selected`/`rendered` counts in the adapter extensions |
 | `memory_delivery` | Per placed recall block | Binding to exact main-lane call(s) with placement proof |
 
 {% hint style="warning" %}

@@ -780,6 +780,12 @@ class CureMemoryBackend(BaseMemoryBackend):
         score = getattr(memory, "metadata", {}).get("score")
         return score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
 
+    def _matched_precision(self) -> str:
+        # The native search is a local full scan with no internal truncation
+        # (every row whose score clears the scorer's zero bar is returned),
+        # so len(hits) IS the true match count — never a lower bound.
+        return "exact"
+
     def _render_line(self, memory) -> str:
         # The layer tag derives from project_id — the field the recall lattice,
         # the upsert guard, and the audit replay all key on — never from the

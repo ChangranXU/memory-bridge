@@ -264,6 +264,9 @@ def test_search_end_returns_platform_hit_refs(traced_backend, capture_server, fa
     assert ref["extensions"]["mem0"]["user_id"] == "minisweagent"
     mem0 = end_payload["extensions"]["mem0"]
     assert (mem0["matched"], mem0["selected"], mem0["rendered"], mem0["budget_dropped"]) == (1, 1, 1, 0)
+    # The hosted platform returns a top-k pool, so the raw hit count is only
+    # a floor on the true match total — the default precision.
+    assert end_payload["matched_count"] == {"value": 1, "precision": "lower_bound"}
     backend.finalize()
 
 

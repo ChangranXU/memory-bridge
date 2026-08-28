@@ -19,7 +19,7 @@ Each memory-arm instance runs behind a single roster proxy with three lanes (MAI
 | Lane | cure\_memory arm | mem0 arm | tencentdb arm | Traffic |
 |---|---|---|---|---|
 | **MAIN** | Benchmark model | Benchmark model | Benchmark model | Every model call (recorded) |
-| **Secondary** | EXTRACT — CURE's extraction LLM | MEMORY — zero model calls | MEMORY — zero model calls | Extraction decisions and annotation namespace (mem0's extraction is hosted on the platform — the lane carries no model calls, the bridge posts the protocol from the platform's receipts; tencentdb's extraction runs inside the container, unrecorded) |
+| **Secondary** | EXTRACT — CURE's extraction LLM | MEMORY — zero model calls | MEMORY — zero model calls | Extraction decisions and annotation namespace (mem0's extraction runs off-trajectory in every mode — hosted by the platform, inside the server-mode container, or in-process in library mode: the lane carries no model calls, the bridge posts the protocol from the mode's receipts; tencentdb's extraction runs inside the container, unrecorded) |
 | **QUERY** | Recall-query rewriter | Recall-query rewriter | Recall-query rewriter | Rewrite calls only (recorded as raw model traffic); carries no `memory_role_bind` and emits no `memory_*` events |
 
 The bridge resolves each lane's annotate endpoint using the following precedence:

@@ -41,7 +41,7 @@ endpoint contract are agent-agnostic by design.
 | Integration | Storage | Extraction | Details |
 |---|---|---|---|
 | [CURE](integration/cure_memory/) | Local SQLite | Dedicated LLM (EXTRACT lane) | Two-layer repo/general scoping |
-| [mem0 Platform](integration/mem0/) | Hosted ([mem0.ai](https://mem0.ai)) | Platform-side | Zero-infrastructure setup |
+| [mem0](integration/mem0/) | Three modes: hosted ([mem0.ai](https://mem0.ai)) platform, per-run OSS server containers, in-process library | Engine-side (hosted / in-container / in-process) | Mode selected in `configs/memory_defaults.yaml` |
 | [TencentDB-Agent-Memory](integration/tencentdb/) | Per-run MemoryCore container | Server-side pipeline | Three injected recall layers (L1/L2/L3) + on-demand L0 search |
 
 ## Key features
@@ -115,7 +115,8 @@ uv run python -m pytest shared-bridge/tests integration/cure_memory/tests \
 # Memory arm (pick an integration)
 head -2 instance-ids.txt > /tmp/first2-ids.txt
 ./utils/setup-run.sh /tmp/first2-ids.txt first2
-./utils/run-memory-arm.sh cure_memory        # or: mem0 (MEM0_API_KEY in integration/mem0/.env)
+./utils/run-memory-arm.sh cure_memory        # or: mem0 (platform mode: MEM0_API_KEY in the root .env;
+                                             #      server/library modes: EMBEDDING_* quartet required)
                                              # or: tencentdb (Docker; optional EMBEDDING_* quartet in .env)
 ```
 
@@ -140,7 +141,7 @@ For a deeper walkthrough of run artifacts and pipeline phases, see
 shared-bridge/            generic bridge: agent hooks, backend lifecycle, endpoint contract, tracing transport,
                             query rewriter, search cache, prompt homes
 integration/cure_memory/  CURE integration (local SQLite + extraction LLM)
-integration/mem0/         mem0 Platform integration (hosted)
+integration/mem0/         mem0 integration (three modes: hosted platform, OSS server, in-process library)
 integration/tencentdb/    TencentDB-Agent-Memory integration (MemoryCore container)
 
 # SWE-bench evaluation harness

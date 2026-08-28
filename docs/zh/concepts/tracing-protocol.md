@@ -19,7 +19,7 @@ description: Schema-v6 memory_* 标注事件与 lane 接线方式。
 | Lane | cure\_memory 臂 | mem0 臂 | tencentdb 臂 | 流量 |
 |---|---|---|---|---|
 | **MAIN** | 基准模型 | 基准模型 | 基准模型 | 每次模型调用（录制） |
-| **Secondary** | EXTRACT——CURE 的提取 LLM | MEMORY——零模型调用 | MEMORY——零模型调用 | 提取决策和标注命名空间（mem0 的提取托管在平台上——该 lane 没有模型调用，桥接层根据平台回执发布协议事件；tencentdb 的提取在容器内运行，不记录） |
+| **Secondary** | EXTRACT——CURE 的提取 LLM | MEMORY——零模型调用 | MEMORY——零模型调用 | 提取决策和标注命名空间（mem0 的提取在每种模式下都不走轨迹——平台托管、server 模式的容器内、或 library 模式的进程内：该 lane 没有模型调用，桥接层根据所在模式的回执发布协议事件；tencentdb 的提取在容器内运行，不记录） |
 | **QUERY** | 召回查询改写器 | 召回查询改写器 | 召回查询改写器 | 仅改写调用（作为原始模型流量录制）；不携带 `memory_role_bind`，不发出 `memory_*` 事件 |
 
 桥接层按以下优先级解析每个 lane 的 annotate 端点：

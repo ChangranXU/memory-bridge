@@ -14,6 +14,11 @@ shared-bridge = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# Load-bearing, not hygiene: a vendored mem0 tree under src/ (the server
+# mode's API reference + docker build context; gitignored) would ship
+# importable Python packages that a bare where=["src"] would build into the
+# wheel. Only the bridge package is ours.
+include = ["mem0_bridge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

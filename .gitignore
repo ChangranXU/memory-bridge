@@ -1,8 +1,9 @@
 # Embedded checkout (keeps its own .git / .venv)
 mini-swe-agent/
 
-# Vendored upstream clone (development-time API reference only; never committed)
+# Vendored upstream clones (development-time API reference only; never committed)
 integration/tencentdb/src/TencentDB-Agent-Memory/
+integration/mem0/vendor/mem0/
 
 # Secrets
 .env

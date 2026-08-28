@@ -97,7 +97,7 @@ class MyEndpoint(MemoryEndpoint):
 | Adapter | Backs onto |
 |---|---|
 | `cure_memory_bridge.endpoint.CureMemoryEndpoint` | CURE SQLite store |
-| `mem0_bridge.endpoint.Mem0Endpoint` | mem0 Platform REST client |
+| `mem0_bridge.endpoint.Mem0Endpoint` | mem0 store (platform / server / library mode) |
 | `tencentdb_bridge.endpoint.TencentDBEndpoint` | MemoryCore gateway REST client |
 
 Individual adapters narrow the uniform contract where their engine requires it — for example, the tencentdb adapter rejects `infer: false` and any metadata-bearing update, and the CURE adapter requires `text` on update (see [Integrations](../integrations/overview.md)).

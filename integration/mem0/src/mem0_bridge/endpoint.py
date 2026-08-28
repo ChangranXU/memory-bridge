@@ -1,14 +1,19 @@
-"""Standardized-endpoint adapter over the mem0 Platform REST client.
+"""Standardized-endpoint adapter over a mem0 store (any mode).
 
-Maps the shared ``MemoryEndpoint`` contract onto the platform API. Writes are
-synchronous (the client polls the async add event to completion), and
+Maps the shared ``MemoryEndpoint`` contract onto the ``Mem0Store`` protocol.
+Writes are synchronous (every mode's add returns only after persistence), and
 ``user_id`` is the sole retrieval-isolation boundary: adds are scoped with
 exactly one ``user_id`` and searches filter on it. mem0 memory ids are
-project-global, so update/delete verify ownership with a read first — a memory
+store-global, so update/delete verify ownership with a read first — a memory
 stored under a different ``user_id`` answers 404, exactly like an unknown id.
+
+The search threshold/timeout ride the constructor (resolved from the same
+config the backend reads), never a store-side default: parity between the two
+retrieval surfaces is a constructor contract, pinned in the tests.
 """
 
-from mem0_bridge.client import Mem0ApiError, Mem0PlatformClient
+from mem0_bridge.client import Mem0ApiError
+from mem0_bridge.stores import Mem0Store
 from shared_bridge.annotate import normalize_score
 from shared_bridge.endpoint import (
     AddRequest,
@@ -25,13 +30,22 @@ from shared_bridge.endpoint import (
 
 
 class Mem0Endpoint(MemoryEndpoint):
-    def __init__(self, client: Mem0PlatformClient, default_user_id: str = "minisweagent"):
-        self._client = client
+    def __init__(
+        self,
+        store: Mem0Store,
+        default_user_id: str = "minisweagent",
+        *,
+        search_threshold: float = 0.0,
+        search_timeout: float | None = None,
+    ):
+        self._store = store
         self._default_user_id = default_user_id
+        self._search_threshold = search_threshold
+        self._search_timeout = search_timeout
 
     def add(self, request: AddRequest) -> AddResponse:
         try:
-            results = self._client.add(
+            results = self._store.add(
                 messages=[{"role": m.role, "content": m.content} for m in request.messages],
                 user_id=request.user_id,
                 run_id=request.session_id,
@@ -50,8 +64,12 @@ class Mem0Endpoint(MemoryEndpoint):
 
     def search(self, request: SearchRequest) -> SearchResponse:
         try:
-            hits = self._client.search(
-                query=request.query, user_id=request.user_id, top_k=request.top_k
+            hits = self._store.search(
+                query=request.query,
+                user_id=request.user_id,
+                top_k=request.top_k,
+                threshold=self._search_threshold,
+                timeout=self._search_timeout,
             )
         except Mem0ApiError as e:
             raise MemoryEndpointError(500, f"mem0 search failed: {e.reason}") from e
@@ -67,7 +85,7 @@ class Mem0Endpoint(MemoryEndpoint):
             raise MemoryEndpointError(400, "update requires text or metadata")
         try:
             self._scoped(memory_id, user_id)
-            memory = self._client.update(memory_id, text=request.text, metadata=request.metadata)
+            memory = self._store.update(memory_id, text=request.text, metadata=request.metadata)
         except Mem0ApiError as e:
             raise MemoryEndpointError(self._status(e), f"mem0 update failed: {e.reason}") from e
         if not memory.get("id") or not isinstance(memory.get("memory"), str) or not memory["memory"]:
@@ -80,7 +98,7 @@ class Mem0Endpoint(MemoryEndpoint):
     def delete(self, memory_id: str, *, user_id: str | None = None) -> DeleteResponse:
         try:
             self._scoped(memory_id, user_id)
-            self._client.delete(memory_id)
+            self._store.delete(memory_id)
         except Mem0ApiError as e:
             raise MemoryEndpointError(self._status(e), f"mem0 delete failed: {e.reason}") from e
         return DeleteResponse(success=True, memory_id=memory_id)
@@ -88,9 +106,9 @@ class Mem0Endpoint(MemoryEndpoint):
     # ------------------------------------------------------------------
     def _scoped(self, memory_id: str, user_id: str | None) -> dict:
         """Read the memory first so a foreign user_id looks exactly like an
-        unknown id (mem0 ids are project-global; 404 upholds isolation)."""
+        unknown id (mem0 ids are store-global; 404 upholds isolation)."""
         user_id = user_id or self._default_user_id
-        memory = self._client.get(memory_id)
+        memory = self._store.get(memory_id)
         # A stored user_id of None means the memory was written outside this
         # contract (adds here always carry exactly one): foreign like any
         # other user_id, so fail closed instead of skipping the check.

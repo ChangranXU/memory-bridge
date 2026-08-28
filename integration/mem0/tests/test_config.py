@@ -8,8 +8,12 @@ from mem0_bridge.config import Mem0Config
 
 def test_defaults():
     config = Mem0Config()
+    assert config.mode == "platform"
     assert config.api_key == ""
     assert config.base_url == ""
+    assert config.server_url == ""
+    assert config.server_api_key == ""
+    assert config.run_root == ""
     assert config.infer is True
     assert config.search_threshold == 0.0
     assert config.poll_budget == 60.0
@@ -17,6 +21,15 @@ def test_defaults():
     assert config.scope == "run"
     assert config.enabled is False
     assert config.user_id == "minisweagent"
+
+
+def test_credential_fields_excluded_from_dumps():
+    """api_key and server_api_key are credential fields (rule 4): excluded
+    from dumps and hidden from reprs."""
+    config = Mem0Config(api_key="k1", server_api_key="k2")
+    dumped = config.model_dump()
+    assert "api_key" not in dumped and "server_api_key" not in dumped
+    assert "k1" not in repr(config) and "k2" not in repr(config)
 
 
 def test_api_key_env_fallback_is_backend_side():

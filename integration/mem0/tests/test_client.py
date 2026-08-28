@@ -176,6 +176,9 @@ def test_get_all_posts_filters_with_pagination_params():
     assert dict(request.url.params) == {"page": "1", "page_size": "50"}
     assert body_of(request) == {"filters": {"user_id": "alice"}}
 
+    client.get_all(user_id="alice", page_size=50, page=3)
+    assert dict(requests[1].url.params) == {"page": "3", "page_size": "50"}
+
 
 def test_update_and_delete_paths():
     def handler(request: httpx.Request) -> httpx.Response:

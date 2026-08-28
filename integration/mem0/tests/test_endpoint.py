@@ -9,7 +9,7 @@ from shared_bridge.endpoint import (
     UpdateRequest,
 )
 
-from tests.conftest import FakePlatformClient  # noqa: F401  (documents the scripted seam)
+from tests.conftest import FakeMem0Store  # noqa: F401  (documents the scripted seam)
 from mem0_bridge.endpoint import Mem0Endpoint
 
 

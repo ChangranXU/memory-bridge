@@ -33,6 +33,100 @@ def test_start_missing_api_key_unavailable(make_backend, monkeypatch):
     assert data["events"][0]["kind"] == "error"
 
 
+# ---------------------------------------------------------------------------
+# Mode dispatch + mode-conditional fail-closed validation
+# ---------------------------------------------------------------------------
+def _clear_mode_env(monkeypatch):
+    for name in (
+        "MEM0_API_KEY", "MEM0_BASE_URL", "MEM0_SERVER_URL", "MEM0_SERVER_API_KEY",
+        "EMBEDDING_MODEL", "EMBEDDING_API_KEY", "EMBEDDING_BASE_URL", "EMBEDDING_DIMENSIONS",
+        "MODEL", "API_KEY", "BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _set_quartet(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "emb-key")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://emb.invalid")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1536")
+
+
+def test_server_mode_requires_server_url(make_backend, fake_client, monkeypatch):
+    _clear_mode_env(monkeypatch)
+    backend = make_backend(mode="server", server_url="")
+    backend.start()
+    assert backend._available is False
+    assert "server_url" in json.loads(read_memory_json(backend))["events"][0]["error"]
+
+
+def test_server_mode_requires_the_embedding_quartet(make_backend, fake_client, monkeypatch):
+    """The OSS engine embeds on every add/search with no lexical fallback:
+    a missing quartet would boot healthy and die on the first add — fail closed."""
+    _clear_mode_env(monkeypatch)
+    _set_quartet(monkeypatch)
+    monkeypatch.delenv("EMBEDDING_DIMENSIONS")
+    backend = make_backend(mode="server", server_url="http://127.0.0.1:8890")
+    backend.start()
+    assert backend._available is False
+    assert "EMBEDDING_DIMENSIONS" in json.loads(read_memory_json(backend))["events"][0]["error"]
+
+
+def test_server_mode_resolves(make_backend, fake_client, monkeypatch):
+    _clear_mode_env(monkeypatch)
+    _set_quartet(monkeypatch)
+    backend = make_backend(mode="server", server_url="http://127.0.0.1:8890/")
+    backend.start()
+    assert backend._available is True
+    assert backend.stats()["api_base_url"] == "http://127.0.0.1:8890"
+    backend.finalize()
+    data = json.loads(read_memory_json(backend))
+    assert data["settings"]["mode"] == "server"
+
+
+def test_library_mode_requires_run_root(make_backend, fake_client, monkeypatch):
+    _clear_mode_env(monkeypatch)
+    backend = make_backend(mode="library", run_root="")
+    backend.start()
+    assert backend._available is False
+    assert "run_root" in json.loads(read_memory_json(backend))["events"][0]["error"]
+
+
+def test_library_mode_requires_roster_llm_keys(make_backend, fake_client, monkeypatch, tmp_path):
+    _clear_mode_env(monkeypatch)
+    _set_quartet(monkeypatch)
+    backend = make_backend(mode="library", run_root=str(tmp_path))
+    backend.start()
+    assert backend._available is False
+    assert "MODEL/API_KEY/BASE_URL" in json.loads(read_memory_json(backend))["events"][0]["error"]
+
+
+def test_library_mode_resolves_and_records_the_llm_upstream(make_backend, fake_client, monkeypatch, tmp_path):
+    _clear_mode_env(monkeypatch)
+    _set_quartet(monkeypatch)
+    monkeypatch.setenv("MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("API_KEY", "roster-key")
+    monkeypatch.setenv("BASE_URL", "https://api.deepseek.com")
+    backend = make_backend(mode="library", run_root=str(tmp_path))
+    backend.start()
+    assert backend._available is True
+    assert backend.stats()["api_base_url"] == "https://api.deepseek.com"
+    backend.finalize()
+    data = json.loads(read_memory_json(backend))
+    assert data["settings"]["mode"] == "library"
+
+
+def test_per_mode_identity_scheme(make_backend, fake_client, monkeypatch, tmp_path):
+    _clear_mode_env(monkeypatch)
+    _set_quartet(monkeypatch)
+    monkeypatch.setenv("MODEL", "m")
+    monkeypatch.setenv("API_KEY", "k")
+    monkeypatch.setenv("BASE_URL", "https://b.invalid")
+    assert make_backend()._identity_scheme == "mem0-platform-memory-v1"
+    assert make_backend(mode="server", server_url="http://h")._identity_scheme == "mem0-server-memory-v1"
+    assert make_backend(mode="library", run_root=str(tmp_path))._identity_scheme == "mem0-library-memory-v1"
+
+
 def read_memory_json(backend):
     from pathlib import Path
 
@@ -376,7 +470,7 @@ def test_finalize_close_error_reraises_under_strict(make_backend, fake_client):
     with pytest.raises(RuntimeError, match="close boom"):
         backend.finalize()
     assert fake_client.closed is True
-    assert backend._client is None
+    assert backend._store is None
     assert json.loads(read_memory_json(backend))["available"] is True
 
 
@@ -391,7 +485,7 @@ def test_finalize_close_error_contained_non_strict(make_backend, fake_client):
     fake_client.close = raising_close
     backend.finalize()  # contained
     assert fake_client.closed is True
-    assert backend._client is None
+    assert backend._store is None
 
 
 def test_recall_malformed_hit_skipped(make_backend, fake_client, monkeypatch):
@@ -461,11 +555,11 @@ def test_api_base_url_is_sanitized_in_artifacts(make_backend):
 
 
 # ---------------------------------------------------------------------------
-# Extraction guidelines (the shared policy layer sent as custom_instructions)
+# Extraction guidelines (the shared policy layer via the store's guidelines channel)
 # ---------------------------------------------------------------------------
 def test_extraction_add_carries_the_default_guidelines(make_backend, fake_client):
     """No override: every extraction add carries the shared default guidelines
-    (episode context appended) as custom_instructions, and memory.json records
+    (episode context appended) through the add's guidelines channel, and memory.json records
     the conveyed text."""
     backend = make_backend(extract_every_n_steps=10)
     backend.start()
@@ -474,14 +568,14 @@ def test_extraction_add_carries_the_default_guidelines(make_backend, fake_client
     conveyed = (
         f"{EXTRACTION_GUIDELINES_DEFAULT}\n\n{_episode_context('test-instance')}"
     )
-    assert fake_client.add_calls[0]["custom_instructions"] == conveyed
+    assert fake_client.add_calls[0]["guidelines"] == conveyed
     backend.finalize()
     settings = json.loads(read_memory_json(backend))["settings"]
     assert settings["extraction_guidelines"] == conveyed
 
 
 def test_extraction_guidelines_override_replaces_the_default(make_backend, fake_client):
-    """An override replaces the shared default wholesale: the platform receives
+    """An override replaces the shared default wholesale: the store receives
     the override text, never default + override concatenated. The base's
     episode context still rides along — episode fact, not policy."""
     backend = make_backend(extract_every_n_steps=10, extraction_guidelines="prefer operational facts")
@@ -489,6 +583,6 @@ def test_extraction_guidelines_override_replaces_the_default(make_backend, fake_
     backend.record([{"role": "user", "content": "hello"}], step=1)
     backend.maybe_extract(10)
     assert (
-        fake_client.add_calls[0]["custom_instructions"]
+        fake_client.add_calls[0]["guidelines"]
         == f"prefer operational facts\n\n{_episode_context('test-instance')}"
     )

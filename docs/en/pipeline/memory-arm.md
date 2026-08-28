@@ -42,10 +42,13 @@ Per instance, the driver:
 {% tab title="mem0" %}
 **Proxy lanes:** MAIN (benchmark model) + MEMORY (zero model calls, annotation namespace) + QUERY (rewriter)
 
-Run isolation comes from a per-run user ID minted from the timestamped run-root name.
+Run isolation comes from a per-run user ID minted from the timestamped run-root name (the server/library modes add fresh per-run stores on top).
 
-**Requirements:**
-* `MEM0_API_KEY` in `integration/mem0/.env`
+The deployment mode comes from the anchored `mode:` line in `integration/mem0/configs/memory_defaults.yaml` (yaml-owned — `--config agent.memory.mode=` extras are refused):
+
+* `platform` (default) — the hosted API; extraction runs platform-side. Requires `MEM0_API_KEY` in the bundle-root `.env`.
+* `server` — the driver manages a two-container OSS stack per run root (pgvector + the API server built from the vendored clone, engine pinned `mem0ai==2.0.19`) at `127.0.0.1:8890`, under a machine-wide single-arm claim; store volumes under `<run-root>/mem0-server/`. Requires Docker running plus the full `EMBEDDING_*` quartet (fail-closed).
+* `library` — the `mem0ai` engine in-process via the opt-in `mem0-library` dependency group (every instance invocation carries `uv run --group mem0-library`); store under `<run-root>/mem0/`. Requires the `EMBEDDING_*` quartet.
 {% endtab %}
 
 {% tab title="tencentdb" %}
@@ -107,6 +110,6 @@ The driver regenerates the recorder's `.env` from the provider `.env` each run. 
 |---|---|---|---|
 | `API_KEY` / `BASE_URL` / `MODEL` | Required | Required | Required |
 | `EXTRACT_*` | Not used (driver-managed per instance from the EXTRACT proxy lane) | Not used | Not used (container points at the upstream directly) |
-| `MEM0_API_KEY` | Not used | Required | Not used |
-| `EMBEDDING_*` (all four or none) | Not used | Not used | Optional (vector lane; partial sets refused) |
+| `MEM0_API_KEY` | Not used | Required (platform mode only) | Not used |
+| `EMBEDDING_*` (all four or none) | Not used | Required in server/library modes (fail-closed); unused in platform mode | Optional (vector lane; partial sets refused) |
 | `QUERY_*` | Optional (defaults to role-1) | Optional (defaults to role-1) | Optional (defaults to role-1) |

@@ -192,12 +192,15 @@ class Mem0PlatformClient:
             return []
         return [item for item in results if isinstance(item, dict)]
 
-    def get_all(self, *, user_id: str, page_size: int = 100) -> dict:
+    def get_all(self, *, user_id: str, page_size: int = 100, page: int = 1) -> dict:
+        """One page of the v3 get-all envelope. Pagination is the caller's
+        loop: the envelope carries Django-style ``count``/``next``/``previous``
+        (verified against the live API), and ``next`` null ends the walk."""
         return self._request(
             "POST",
             "/v3/memories/",
             json={"filters": {"user_id": user_id}},
-            params={"page": 1, "page_size": page_size},
+            params={"page": page, "page_size": page_size},
         )
 
     def get(self, memory_id: str) -> dict:

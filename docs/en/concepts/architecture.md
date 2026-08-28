@@ -24,7 +24,7 @@ graph TB
 
     subgraph "integration/"
         cure["cure_memory/<br/>Local SQLite + extraction LLM"]
-        mem0["mem0/<br/>mem0 Platform (hosted)"]
+        mem0["mem0/<br/>mem0 (platform / server / library)"]
         tencentdb["tencentdb/<br/>MemoryCore container"]
     end
 
@@ -66,7 +66,7 @@ memory-bridge/
 │   └── run.py         bind_swebench_app(): rebind the runner's agent class
 ├── integration/       One package per memory system, bound to shared-bridge
 │   ├── cure_memory/   Local SQLite store + separate extraction LLM
-│   ├── mem0/          mem0 Platform (hosted extraction, httpx REST client)
+│   ├── mem0/          mem0 (three modes: hosted platform, OSS server container, in-process library)
 │   └── tencentdb/     TencentDB-Agent-Memory (MemoryCore container per run root)
 ├── utils/             Pipeline scripts (setup → predict → merge → evaluate → summarize)
 ├── mini-swe-agent/    Prediction runner checkout (keeps its own tooling venv)

@@ -42,10 +42,13 @@ head -2 instance-ids.txt > /tmp/first2-ids.txt
 {% tab title="mem0" %}
 **代理 lane：** MAIN（基准模型）+ MEMORY（零模型调用，标注命名空间）+ QUERY（改写器）
 
-运行隔离来自从带时间戳的 run-root 名称生成的每次运行的用户 ID。
+运行隔离来自从带时间戳的 run-root 名称生成的每次运行的用户 ID（server/library 模式在此之上叠加全新的每 run 存储）。
 
-**要求：**
-* `integration/mem0/.env` 中的 `MEM0_API_KEY`
+部署模式来自 `integration/mem0/configs/memory_defaults.yaml` 中带锚定的 `mode:` 行（归 yaml 所有——`--config agent.memory.mode=` 附加项会被拒绝）：
+
+* `platform`（默认）——托管 API；提取在平台侧运行。需要 bundle 根目录 `.env` 中的 `MEM0_API_KEY`。
+* `server`——驱动器为每个 run root 管理双容器 OSS 栈（pgvector + 从 vendored 克隆构建的 API server，引擎 pin 为 `mem0ai==2.0.19`），位于 `127.0.0.1:8890`，机器级单臂占用；存储卷在 `<run-root>/mem0-server/`。需要 Docker 运行中及完整的 `EMBEDDING_*` 四元组（失效封闭）。
+* `library`——`mem0ai` 引擎在进程内运行，经可选依赖组 `mem0-library`（每次实例调用携带 `uv run --group mem0-library`）；存储在 `<run-root>/mem0/`。需要 `EMBEDDING_*` 四元组。
 {% endtab %}
 
 {% tab title="tencentdb" %}
@@ -107,6 +110,6 @@ head -2 instance-ids.txt > /tmp/first2-ids.txt
 |---|---|---|---|
 | `API_KEY` / `BASE_URL` / `MODEL` | 必需 | 必需 | 必需 |
 | `EXTRACT_*` | 不使用（驱动器基于 EXTRACT 代理 lane 按实例管理） | 不使用 | 不使用（容器直连上游） |
-| `MEM0_API_KEY` | 不使用 | 必需 | 不使用 |
-| `EMBEDDING_*`（四项全设或全不设） | 不使用 | 不使用 | 可选（向量 lane；部分设置被拒绝） |
+| `MEM0_API_KEY` | 不使用 | 必需（仅 platform 模式） | 不使用 |
+| `EMBEDDING_*`（四项全设或全不设） | 不使用 | server/library 模式下必需（失效封闭）；platform 模式不使用 | 可选（向量 lane；部分设置被拒绝） |
 | `QUERY_*` | 可选（默认为 role-1） | 可选（默认为 role-1） | 可选（默认为 role-1） |

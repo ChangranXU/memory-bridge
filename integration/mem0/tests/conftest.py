@@ -11,14 +11,14 @@ SUBMIT_COMMAND = "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\necho done"
 
 
 # ---------------------------------------------------------------------------
-# Scripted fake platform client (the backend's _make_platform_client seam)
+# Scripted fake store (the backend's _open_store seam)
 # ---------------------------------------------------------------------------
-class FakePlatformClient:
-    """Offline duck-type stand-in for Mem0PlatformClient.
+class FakeMem0Store:
+    """Offline duck-type stand-in for a Mem0Store (platform-shaped rows).
 
-    Behaves like the hosted API surface the backend/endpoint use: add
-    returns one ADD result per message (or the scripted error), search
-    returns the user's memories in insertion order, and unknown ids 404.
+    Behaves like the mem0 surface the backend/endpoint use: add returns one
+    ADD receipt per message (or the scripted error), search returns the user's
+    memories in insertion order, and unknown ids 404.
     """
 
     def __init__(self):
@@ -33,18 +33,17 @@ class FakePlatformClient:
         self.search_error: Exception | None = None
         self.add_event: str = "ADD"
 
-    def ping(self):
+    def health(self):
         return {"status": "ok", "org_id": "org-test", "project_id": "proj-test"}
 
-    def add(self, *, messages, user_id, run_id=None, infer=True, metadata=None,
-            custom_instructions=None, poll_budget=60.0, poll_interval=1.0):
+    def add(self, *, messages, user_id, run_id=None, infer=True, metadata=None, guidelines=None):
         self.add_calls.append({
             "messages": [dict(m) for m in messages],
             "user_id": user_id,
             "run_id": run_id,
             "infer": infer,
             "metadata": metadata,
-            "custom_instructions": custom_instructions,
+            "guidelines": guidelines,
         })
         if self.add_error is not None:
             raise self.add_error
@@ -73,11 +72,11 @@ class FakePlatformClient:
         hits = [dict(m) for m in self.memories.values() if m["user_id"] == user_id]
         return hits[:top_k]
 
-    def get_all(self, *, user_id, page_size=100):
-        self.get_all_calls.append({"user_id": user_id, "page_size": page_size})
-        # The real v3 surfaces split provenance: search rows echo the add-time
-        # run_id, while get-all rows omit run_id and carry the same value
-        # under session_id — model both, not one row shape for both.
+    def get_all(self, *, user_id, limit):
+        self.get_all_calls.append({"user_id": user_id, "limit": limit})
+        # The real surfaces split provenance per mode: the platform's v3
+        # get-all rows omit run_id and carry the same value under session_id —
+        # model that split, not one row shape for both.
         hits = []
         for memory in self.memories.values():
             if memory["user_id"] != user_id:
@@ -87,7 +86,7 @@ class FakePlatformClient:
             if run_id is not None:
                 row["session_id"] = run_id
             hits.append(row)
-        return {"count": len(hits), "next": None, "previous": None, "results": hits}
+        return hits[:limit]
 
     def get(self, memory_id):
         memory = self.memories.get(memory_id)
@@ -123,12 +122,12 @@ def _api_error(status_code, reason):
 
 @pytest.fixture
 def fake_client(monkeypatch):
-    """Inject one FakePlatformClient into every backend started in the test."""
+    """Inject one FakeMem0Store into every backend started in the test."""
     from mem0_bridge.backend import Mem0Backend
 
-    client = FakePlatformClient()
-    monkeypatch.setattr(Mem0Backend, "_make_platform_client", lambda self, settings: client)
-    return client
+    store = FakeMem0Store()
+    monkeypatch.setattr(Mem0Backend, "_open_store", lambda self, settings: store)
+    return store
 
 
 # ---------------------------------------------------------------------------

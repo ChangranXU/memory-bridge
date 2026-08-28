@@ -26,8 +26,8 @@ The shared layer (`shared-bridge/`) never names a specific integration — this 
   <td><a href="cure-memory.md">cure-memory</a></td>
 </tr>
 <tr>
-  <td><strong>mem0 Platform</strong></td>
-  <td>Hosted extraction via the mem0 Platform REST API. Zero-infrastructure memory management.</td>
+  <td><strong>mem0</strong></td>
+  <td>mem0 in three deployment modes: hosted Platform, per-run self-hosted OSS server, or in-process library. Off-trajectory extraction in every mode.</td>
   <td><code>mem0</code></td>
   <td><a href="mem0-platform.md">mem0-platform</a></td>
 </tr>
@@ -43,13 +43,13 @@ The shared layer (`shared-bridge/`) never names a specific integration — this 
 
 | Feature | CURE | mem0 | tencentdb |
 |---|---|---|---|
-| **Storage** | Local SQLite | Hosted platform | Per-run MemoryCore container (SQLite + FTS5) |
-| **Extraction** | Dedicated LLM (EXTRACT lane) | Platform-side | Server-side pipeline (direct provider upstream) |
+| **Storage** | Local SQLite | Hosted platform, per-run server containers, or in-process store (per mode) | Per-run MemoryCore container (SQLite + FTS5) |
+| **Extraction** | Dedicated LLM (EXTRACT lane) | Engine-side: hosted / in-container / in-process (per mode) | Server-side pipeline (direct provider upstream) |
 | **Proxy lanes** | MAIN + EXTRACT + QUERY | MAIN + MEMORY (zero model calls) + QUERY | MAIN + MEMORY (zero model calls) + QUERY |
-| **Run isolation** | Run-root SQLite file | Per-run `user_id` | Per-run `user_id` + fresh container volume |
+| **Run isolation** | Run-root SQLite file | Per-run `user_id` (+ fresh per-run store in server/library modes) | Per-run `user_id` + fresh container volume |
 | **Scope support** | Two-layer lattice (repo-bound + general) | User-wide (no bridge-side scope) | Native two-tier (`task_id` repo + team/agent general) |
 | **Endpoint adapter** | `CureMemoryEndpoint` | `Mem0Endpoint` | `TencentDBEndpoint` |
-| **Dependencies** | Stdlib + pydantic | httpx (no `mem0ai` SDK) | httpx + pyyaml (no vendored SDK; Docker) |
+| **Dependencies** | Stdlib + pydantic | httpx (`mem0ai` only via the opt-in `mem0-library` group, library mode) | httpx + pyyaml (no vendored SDK; Docker) |
 
 ## Search semantics
 

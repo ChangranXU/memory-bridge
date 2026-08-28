@@ -1,0 +1,143 @@
+"""Server mode: a per-run self-hosted mem0 OSS server container as a Mem0Store.
+
+Wire shape (verified against the vendored server's ``main.py`` — pin in
+``integration/mem0/VENDORING.md``): NO ``/v1`` prefix and
+``redirect_slashes=False`` (a trailing slash is a 404); adds are SYNCHRONOUS
+(``POST /memories`` returns ``{"results": [...]}`` — no event polling);
+search is ``POST /search`` with ``{query, filters, top_k, threshold}``;
+scoped get-all is ``GET /memories?user_id=...&top_k=N`` (query params, capped
+server-side at 1000); the readiness probe is ``GET /auth/setup-status`` (the
+API server has no ``/health`` — that path is the dashboard's).
+
+Auth: the arm runs the container with ``AUTH_DISABLED=true``, so NO auth
+header is sent when ``server_api_key`` is empty — a presented credential would
+reach the JWT path and 500 without a configured ``JWT_SECRET``
+(``server/auth.py``). Missing-id mapping: ``GET /memories/{id}`` answers 200
+``null`` for unknown ids (PUT/DELETE already 404 via the server's ValueError
+handler) — this store maps the null to the protocol's 404 convention.
+"""
+
+import httpx
+
+from mem0_bridge.client import Mem0ApiError, _error_reason, _results_of
+from mem0_bridge.stores import Receipt
+
+# The server clamps get-all top_k at ALL_MEMORIES_LIMIT (server/main.py).
+_ALL_MEMORIES_LIMIT = 1000
+
+
+class ServerStore:
+    def __init__(
+        self,
+        *,
+        server_url: str,
+        server_api_key: str = "",
+        timeout: float = 30.0,
+        add_timeout: float = 300.0,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        # No auth header at all without a key (see the module docstring).
+        headers = {"X-API-Key": server_api_key} if server_api_key else {}
+        # add_timeout >> timeout: an infer=true add is one extraction LLM
+        # round-trip plus embedder calls INSIDE the request — far past the 30 s
+        # client default for reasoning-style models (the add would ReadTimeout
+        # while the server keeps working, then the retained-batch retry re-pays
+        # the LLM call).
+        self._add_timeout = add_timeout
+        self._client = httpx.Client(
+            base_url=server_url.rstrip("/"),
+            headers=headers,
+            timeout=timeout,
+            transport=transport,
+        )
+
+    def _request(self, method: str, path: str, *, json=None, params=None, timeout: float | None = None):
+        # Same per-call-timeout semantics as the platform client: an explicit
+        # None would DISABLE the httpx timeout, so it is never forwarded.
+        override = {} if timeout is None else {"timeout": timeout}
+        response = self._client.request(method, path, json=json, params=params, **override)
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if response.status_code >= 400:
+            raise Mem0ApiError(response.status_code, _error_reason(body, response.status_code))
+        return body
+
+    def close(self) -> None:
+        self._client.close()
+
+    # ------------------------------------------------------------------
+    # Operations
+    # ------------------------------------------------------------------
+    def health(self) -> dict:
+        body = self._request("GET", "/auth/setup-status")
+        return body if isinstance(body, dict) else {}
+
+    def add(
+        self,
+        *,
+        messages: list[dict],
+        user_id: str,
+        run_id: str | None = None,
+        infer: bool = True,
+        metadata: dict | None = None,
+        guidelines: str | None = None,
+    ) -> list[Receipt]:
+        # ``prompt`` is the OSS per-call extraction-guidelines channel (it lands
+        # in the same advisory slot as the platform's custom_instructions).
+        body: dict = {"messages": messages, "user_id": user_id, "infer": infer}
+        if run_id:
+            body["run_id"] = run_id
+        if metadata:
+            body["metadata"] = metadata
+        if guidelines and guidelines.strip():
+            body["prompt"] = guidelines.strip()
+        response = self._request("POST", "/memories", json=body, timeout=self._add_timeout)
+        return _results_of(response if isinstance(response, dict) else {})
+
+    def search(
+        self,
+        *,
+        query: str,
+        user_id: str,
+        top_k: int,
+        threshold: float,
+        timeout: float | None = None,
+    ) -> list[dict]:
+        body: dict = {"query": query, "filters": {"user_id": user_id}, "top_k": top_k, "threshold": threshold}
+        response = self._request("POST", "/search", json=body, timeout=timeout)
+        results = response.get("results") if isinstance(response, dict) else None
+        if not isinstance(results, list):
+            return []
+        return [item for item in results if isinstance(item, dict)]
+
+    def get(self, memory_id: str) -> dict:
+        body = self._request("GET", f"/memories/{memory_id}")
+        if body is None:
+            # The server's GET answers 200 null for unknown ids — map it to the
+            # protocol's missing-id convention (PUT/DELETE already 404).
+            raise Mem0ApiError(404, f"memory {memory_id} not found")
+        return body if isinstance(body, dict) else {}
+
+    def get_all(self, *, user_id: str, limit: int) -> list[dict]:
+        # Query-param scoped get-all; the entity filter is hard-required by the
+        # engine and the server caps top_k at 1000 — clamp explicitly.
+        response = self._request(
+            "GET", "/memories", params={"user_id": user_id, "top_k": max(1, min(limit, _ALL_MEMORIES_LIMIT))}
+        )
+        results = response.get("results") if isinstance(response, dict) else None
+        if not isinstance(results, list):
+            return []
+        return [item for item in results if isinstance(item, dict)][:limit]
+
+    def update(self, memory_id: str, *, text: str | None = None, metadata: dict | None = None) -> dict:
+        body = {key: value for key, value in (("text", text), ("metadata", metadata)) if value is not None}
+        self._request("PUT", f"/memories/{memory_id}", json=body)
+        # The OSS PUT answers a bare {"message": ...} — the echo the contract
+        # needs is a follow-up read.
+        return self.get(memory_id)
+
+    def delete(self, memory_id: str) -> dict:
+        body = self._request("DELETE", f"/memories/{memory_id}")
+        return body if isinstance(body, dict) else {}

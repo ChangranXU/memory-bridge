@@ -31,7 +31,7 @@ description: memory-bridge 的所有共享配置键。
 | `extraction_guidelines` | `str` | `""` | 提取策略文本。`""` 使用共享默认值；非空值整体替换默认值。 |
 
 {% hint style="info" %}
-提取指引通过集成的原生通道传达。CURE 集成将其附加到 `MEMORY_POLICY_PROMPT`；mem0 将其作为 add 端点的 `custom_instructions` 发送。引擎不接受自定义提示规则的集成会忽略此字段（tencentdb 后端未声明该通道：其存储式提示路由按 scope 键控，且提取是异步的，每 episode 的上下文无法随之搭载）。
+提取指引通过集成的原生通道传达。CURE 集成将其附加到 `MEMORY_POLICY_PROMPT`；mem0 将其作为 add 调用的建议性指令发送（平台上为 `custom_instructions`，OSS 表面为 `prompt`）。引擎不接受自定义提示规则的集成会忽略此字段（tencentdb 后端未声明该通道：其存储式提示路由按 scope 键控，且提取是异步的，每 episode 的上下文无法随之搭载）。
 {% endhint %}
 
 ## 召回
@@ -89,11 +89,11 @@ API=openai-chat
 | `EXTRACT_MODEL` | CURE 提取模型。仅作后端回退：记忆臂驱动器会基于 EXTRACT 代理 lane 按实例覆盖全部三个 `EXTRACT_*` 值，且 `agent.memory.extract_*` 配置字段优先于这些环境变量。 |
 | `EXTRACT_BASE_URL` | CURE 提取端点（回退语义同 `EXTRACT_MODEL`）。 |
 | `EXTRACT_API_KEY` | CURE 提取 API key（回退语义同 `EXTRACT_MODEL`）。 |
-| `EMBEDDING_MODEL` | tencentdb embedding 模型。与 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL` 和 `EMBEDDING_DIMENSIONS` 组成全有或全无的四元组——记忆臂驱动器拒绝部分设置（上游会将其静默禁用）。 |
-| `EMBEDDING_API_KEY` | tencentdb embedding API key（全有或全无四元组的一部分——见 `EMBEDDING_MODEL`）。 |
-| `EMBEDDING_BASE_URL` | tencentdb embedding 端点（全有或全无四元组的一部分——见 `EMBEDDING_MODEL`）。 |
-| `EMBEDDING_DIMENSIONS` | tencentdb embedding 维度（全有或全无四元组的一部分——见 `EMBEDDING_MODEL`）。 |
-| `MEM0_API_KEY` | mem0 Platform API key（在 `integration/mem0/.env` 中） |
+| `EMBEDDING_MODEL` | embedding 模型。与 `EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL` 和 `EMBEDDING_DIMENSIONS` 组成四元组：tencentdb 臂为可选的全有或全无（驱动器拒绝部分设置——上游会将其静默禁用）；mem0 的 server/library 模式下**必需**（失效封闭）。 |
+| `EMBEDDING_API_KEY` | embedding API key（四元组的一部分——见 `EMBEDDING_MODEL`）。 |
+| `EMBEDDING_BASE_URL` | embedding 端点（四元组的一部分——见 `EMBEDDING_MODEL`）。 |
+| `EMBEDDING_DIMENSIONS` | embedding 维度（四元组的一部分——见 `EMBEDDING_MODEL`）。 |
+| `MEM0_API_KEY` | mem0 Platform API key（bundle 根目录 `.env`；仅 platform 模式） |
 
 {% hint style="warning" %}
 凭据保存在 pydantic 字段中，标记为 `exclude=True, repr=False`。只有脱敏后的 URL 才会出现在产物和日志中——用户信息、查询字符串和片段被移除，轨迹 ID 被替换为其 16 个十六进制字符的 SHA-256 哈希前缀。

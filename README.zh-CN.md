@@ -35,7 +35,7 @@ memory-bridge 管理完整的记忆生命周期——录制智能体消息、从
 | 集成 | 存储 | 提取方式 | 特性 |
 |---|---|---|---|
 | [CURE](integration/cure_memory/) | 本地 SQLite | 专用 LLM（EXTRACT lane） | 两层仓库/通用作用域 |
-| [mem0 Platform](integration/mem0/) | 托管（[mem0.ai](https://mem0.ai)） | 平台侧 | 零基础设施 |
+| [mem0](integration/mem0/) | 三种模式：托管平台（[mem0.ai](https://mem0.ai)）、每 run OSS server 容器、进程内 library | 引擎侧（托管 / 容器内 / 进程内） | 在 `configs/memory_defaults.yaml` 中选择模式 |
 | [TencentDB-Agent-Memory](integration/tencentdb/) | 每 run 一个 MemoryCore 容器 | 服务端流水线 | 三个注入召回层（L1/L2/L3）+ 按需 L0 搜索 |
 
 ## 核心特性
@@ -103,7 +103,8 @@ uv run python -m pytest shared-bridge/tests integration/cure_memory/tests \
 # 记忆臂（任选一个集成）
 head -2 instance-ids.txt > /tmp/first2-ids.txt
 ./utils/setup-run.sh /tmp/first2-ids.txt first2
-./utils/run-memory-arm.sh cure_memory        # 或：mem0（MEM0_API_KEY 放在 integration/mem0/.env）
+./utils/run-memory-arm.sh cure_memory        # 或：mem0（platform 模式：MEM0_API_KEY 放根目录 .env；
+                                             #      server/library 模式：需 EMBEDDING_* 四元组）
                                              # 或：tencentdb（需 Docker；可选 EMBEDDING_* 四件套放 .env）
 ```
 
@@ -126,7 +127,7 @@ head -2 instance-ids.txt > /tmp/first2-ids.txt
 shared-bridge/            通用桥接层：智能体钩子、后端生命周期、端点契约、追踪传输、
                             查询改写器、检索缓存、提示词归档
 integration/cure_memory/  CURE 集成（本地 SQLite + 提取 LLM）
-integration/mem0/         mem0 Platform 集成（托管）
+integration/mem0/         mem0 集成（三种模式：托管平台、OSS server、进程内 library）
 integration/tencentdb/    TencentDB-Agent-Memory 集成（MemoryCore 容器）
 
 # SWE-bench 评测框架

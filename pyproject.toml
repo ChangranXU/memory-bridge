@@ -36,3 +36,23 @@ mini-swe-agent = { path = "mini-swe-agent", editable = true }
 
 [dependency-groups]
 dev = ["pytest"]
+# Opt-in stack for the mem0 library-mode arm ONLY (`uv run --group
+# mem0-library`); never in default-groups — the shared env stays mem0ai-free
+# (litellm conflict posture) and every other arm is unaffected. Eviction
+# discipline: uv sync is exact (a plain `uv sync` removes the group), uv run
+# is inexact (it never installs the group on its own) — the group rides every
+# library-mode invocation.
+mem0-library = ["mem0ai==2.0.19"]
+
+[tool.pytest.ini_options]
+# Collection guard: a bare `pytest` from the root must collect only the four
+# documented offline suites — never mini-swe-agent/tests (its own conftest
+# makes it collectable) or the vendored upstream clones' test trees (the mem0
+# clone ships ~99 test files; pytest ignores .gitignore). The documented
+# 4-dir invocation stays the discipline; this keeps the bare form safe.
+testpaths = [
+    "shared-bridge/tests",
+    "integration/cure_memory/tests",
+    "integration/mem0/tests",
+    "integration/tencentdb/tests",
+]

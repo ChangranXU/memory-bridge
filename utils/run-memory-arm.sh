@@ -11,16 +11,19 @@
 # All integrations run one roster traj-recorder proxy per instance:
 # ROLE1=MAIN carries the benchmark model; ROLE2 is the memory-annotate
 # namespace. For cure_memory ROLE2=EXTRACT also carries the CURE decision
-# LLM's traffic; for mem0 ROLE2=MEMORY makes zero model calls (the hosted
-# platform does the extraction) and serves only as the annotation lane; for
-# tencentdb ROLE2=MEMORY is the same zero-model-call annotate lane (the
-# MemoryCore container does the extraction against the provider upstream
-# directly — extraction traffic is not recorded in the trajectory).
-# Run isolation: cure_memory shares a SQLite store in the run root; mem0's
-# store is hosted, so isolation comes from a per-run user id minted from the
-# timestamped run-root name; tencentdb's store is one MemoryCore container
-# per run root (fresh data volume under <run-root>/tdai/data, plus the same
-# per-run user id).
+# LLM's traffic; for mem0 ROLE2=MEMORY makes zero model calls in every mode
+# (extraction runs off-trajectory: hosted by the platform, inside the per-run
+# OSS server container, or in-process against the provider upstream —
+# selected by `mode:` in integration/mem0/configs/memory_defaults.yaml) and
+# serves only as the annotation lane; for tencentdb ROLE2=MEMORY is the same
+# zero-model-call annotate lane (the MemoryCore container does the extraction
+# against the provider upstream directly).
+# Run isolation: cure_memory shares a SQLite store in the run root; mem0 uses
+# a per-run user id minted from the timestamped run-root name in every mode
+# (platform's store is hosted; server adds fresh per-run container volumes
+# under <run-root>/mem0-server, library a fresh store dir <run-root>/mem0);
+# tencentdb's store is one MemoryCore container per run root (fresh data
+# volume under <run-root>/tdai/data, plus the same per-run user id).
 #
 # Everything else resolves from this bundle: mini-swe-agent, shared-bridge,
 # and the integration — all installed in the shared uv env at the bundle root
@@ -51,8 +54,11 @@ require_instance_ids
 
 # Stale embedding-lane exports must not leak into the tencentdb arm's
 # all-or-none check below (the .env is the single source) — unset before the
-# roster .env is sourced.
+# roster .env is sourced. The MEM0_* names get the same treatment: the root
+# .env is their sole source too (a stale MEM0_SERVER_URL from a dead
+# server-mode arm must never reach a platform run).
 unset EMBEDDING_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL EMBEDDING_DIMENSIONS
+unset MEM0_API_KEY MEM0_BASE_URL MEM0_SERVER_URL MEM0_SERVER_API_KEY MEM0_TELEMETRY
 
 # load_model_env sources the roster .env, maps API_KEY/BASE_URL -> OPENAI_*,
 # and sets MODEL_NAME (MSWEA_MODEL_NAME wins; else openai/$MODEL unless $MODEL
@@ -72,6 +78,65 @@ require_flat_roster_keys() {
 # defaults below expand $MODEL/$API_KEY/$API under set -u: validate first,
 # or a non-roster .env dies with an unbound-variable error, not this diagnostic.
 require_flat_roster_keys
+
+# ---- mem0 mode plumbing ----
+# read_mem0_mode — the mem0 integration's single source of truth for its
+# deployment mode, read BY THE DRIVER from the same yaml the bridge loads
+# (configs/memory_defaults.yaml), so driver and bridge can never diverge.
+# Strictly anchored: the shipped yaml carries exactly one comment-free
+# `    mode: <value>` line (any explanation lives on its own line above it),
+# so no match or multiple matches is drift — die loudly, never default
+# silently (an unanchored grep would miss `mode :`/quoted/commented variants
+# and recreate the divergence this reader exists to kill).
+read_mem0_mode() {
+  local yaml="$INTEGRATION/configs/memory_defaults.yaml" count
+  count="$(grep -cE '^    mode: (platform|server|library)$' "$yaml" || true)"
+  if [ "$count" != "1" ]; then
+    die "$yaml must carry exactly one anchored '    mode: platform|server|library' line (found $count) — fix the yaml; the driver refuses to guess the mem0 mode"
+  fi
+  grep -E '^    mode: (platform|server|library)$' "$yaml" | sed -E 's/^    mode: //'
+}
+
+# openai_v1_root URL — the OpenAI-compatible root form (${url%/} + /v1 unless
+# present): mem0's openai LLM/embedder clients append /chat/completions or
+# /embeddings to it, while the roster BASE_URL is the litellm form (with or
+# without a trailing slash). The TDAI_LLM_BASE_URL recipe, shared by the mem0
+# server boot env, the /configure payload, and the library-mode bridge config.
+openai_v1_root() {
+  local u="${1%/}"
+  case "$u" in
+    */v1) printf %s "$u" ;;
+    *) printf %s "$u/v1" ;;
+  esac
+}
+
+# require_mem0_embedding_quartet — server/library modes FAIL CLOSED without the
+# full quartet (tencentdb's all-or-none check shape, but absence is FATAL
+# here): the OSS engine embeds on every add and every search with no
+# lexical-only fallback, so a DeepSeek-shaped roster (no embeddings endpoint)
+# would otherwise boot healthy and die on the first add.
+require_mem0_embedding_quartet() {
+  local _v value missing=""
+  for _v in EMBEDDING_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL EMBEDDING_DIMENSIONS; do
+    eval "value=\${$_v:-}"
+    [ -z "$value" ] && missing="$missing $_v"
+  done
+  [ -z "$missing" ] || die "mem0 $MEM0_MODE mode needs the full EMBEDDING_* quartet in $ENV_FILE (missing:$missing) — the OSS engine has no lexical-only fallback"
+  case "$EMBEDDING_DIMENSIONS" in
+    *[!0-9]* | "") die "EMBEDDING_DIMENSIONS in $ENV_FILE must be a positive integer (got '$EMBEDDING_DIMENSIONS')" ;;
+  esac
+  if [ "$EMBEDDING_DIMENSIONS" -le 0 ]; then
+    die "EMBEDDING_DIMENSIONS in $ENV_FILE must be a positive integer (got '$EMBEDDING_DIMENSIONS')"
+  fi
+}
+
+# The mem0 deployment mode (platform|server|library), resolved before the
+# resume guard below — the store-present check is mode-dependent. A pure yaml
+# read, no side effect.
+MEM0_MODE=""
+if [ "$INTEGRATION_NAME" = "mem0" ]; then
+  MEM0_MODE="$(read_mem0_mode)"
+fi
 
 # The QUERY lane (the recall-query rewriter) rides the roster proxy as ROLE3;
 # each QUERY_* value defaults to the role-1/main provider value, so the
@@ -125,19 +190,27 @@ for line in sys.stdin:
 ' "$RUN_ROOT/runs/mini-swe-agent"
 )" || { log "FATAL: shared-env probe failed (uv run); fix the environment and re-run"; exit 1; }
 
-# Resume guard (rule 3), checked BEFORE any arm side effect (the tencentdb
-# claim, container sweep/start, and recorder .env regeneration all happen in
-# the profile below): with scope=run the memory store is shared across the
-# run root, and a rerun's fresh session id prevents message reprocessing but
-# NOT recall of memories approved during an aborted attempt. An instance with
-# a stale attempt (agent.log exists) but no valid patch would silently recall
+# Resume guard (rule 3), checked BEFORE any arm side effect (the arm claim,
+# container sweep/start, and recorder .env regeneration all happen in the
+# profile below): with scope=run the memory store is shared across the run
+# root, and a rerun's fresh session id prevents message reprocessing but NOT
+# recall of memories approved during an aborted attempt. An instance with a
+# stale attempt (agent.log exists) but no valid patch would silently recall
 # its failed attempt's memories — refuse and require a fresh run root. A
 # crash between instances leaves the store clean and resumes fine.
 # (cure_memory checks its run-root store file first — no file, no
-# contamination possible; mem0's hosted store is always "present"; the
-# tencentdb store is the run-root container volume, likewise always present.)
+# contamination possible; the mem0 platform store is hosted, always
+# "present"; mem0 server mode's store is the run-root pg volume and library
+# mode's the run-root store dir (the tencentdb container-volume semantics);
+# tencentdb's store is the run-root container volume, likewise always present.)
 STORE_PRESENT=1
 if [ "$INTEGRATION_NAME" = "cure_memory" ] && [ ! -f "$RUN_ROOT/runs/mini-swe-agent/cure_memory.sqlite3" ]; then
+  STORE_PRESENT=""
+fi
+if [ "$MEM0_MODE" = "server" ] && [ ! -d "$RUN_ROOT/mem0-server/pg" ]; then
+  STORE_PRESENT=""
+fi
+if [ "$MEM0_MODE" = "library" ] && [ ! -d "$RUN_ROOT/mem0" ]; then
   STORE_PRESENT=""
 fi
 if [ -n "$STORE_PRESENT" ]; then
@@ -372,6 +445,193 @@ start_tdai_container() {
   die "MemoryCore container did not become healthy within 120s (logs above)"
 }
 
+# ---- mem0 OSS server stack lifecycle (mem0 server mode) ----
+# Two containers on one bridge network per run root (the topology the vendored
+# server's boot chain requires — see integration/mem0/VENDORING.md): a
+# pgvector/pg vector DB (the app DB `mem0_app` PLUS the always-present default
+# `postgres` database the vector store targets) and the API server built from
+# the vendored tree with the engine pinned. Port 8890 is fixed, so two mem0
+# server arms cannot run concurrently on one machine — enforced at the process
+# level by the machine-wide claim taken in the profile (same discipline as the
+# tencentdb arm's 8420 claim; see that block for the full claim rationale).
+MEM0_SERVER_IMAGE="mem0-oss-server:2.0.19"
+MEM0_SERVER_PORT=8890
+
+build_mem0_server_image() {
+  if docker image inspect "$MEM0_SERVER_IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  local clone="$INTEGRATION/vendor/mem0"
+  [ -f "$clone/server/Dockerfile" ] || die "missing the vendored mem0 clone at $clone (server mode builds from it — see integration/mem0/VENDORING.md)"
+  # The clone pins the ROUTES; the ENGINE is pinned here: requirements.txt
+  # carries an unpinned lower bound (mem0ai>=0.1.48), so a naive build floats
+  # with PyPI latest. Rewrite it in a staged copy — the clone stays pristine.
+  # Also switch psycopg to its binary variant: the slim base ships no libpq
+  # and the pure wheel dies at first connect ("libpq library not found") —
+  # same version range, bundled driver library. The first build needs network
+  # for pip.
+  local ctx="$MEM0_SERVER_ROOT/build-context"
+  rm -rf "$ctx"
+  cp -R "$clone/server" "$ctx"
+  sed -i.bak -e 's/^mem0ai>=.*$/mem0ai==2.0.19/' -e 's/^psycopg>=/psycopg[binary]>=/' "$ctx/requirements.txt" && rm -f "$ctx/requirements.txt.bak"
+  grep -q '^mem0ai==2.0.19$' "$ctx/requirements.txt" || die "failed to pin mem0ai==2.0.19 in the staged build context"
+  grep -q '^psycopg\[binary\]>=' "$ctx/requirements.txt" || die "failed to switch psycopg to the binary variant in the staged build context"
+  log "building $MEM0_SERVER_IMAGE from the vendored tree (routes fdfb763, engine mem0ai==2.0.19; first build needs network)"
+  docker build -q -t "$MEM0_SERVER_IMAGE" "$ctx" >/dev/null || die "failed to build $MEM0_SERVER_IMAGE"
+  rm -rf "$ctx"
+}
+
+start_mem0_server_stack() {
+  command -v docker >/dev/null 2>&1 || die "docker is required for the mem0 server arm"
+  docker info >/dev/null 2>&1 || die "docker is not running (docker info fails)"
+  # Idempotent pre-run removal of every mem0-server-* container/network, not
+  # just this root's: the EXIT-trap teardown does not cover a SIGKILL'd driver,
+  # and a leaked stack keeps 127.0.0.1:8890 bound. Safe for the same reason as
+  # the tdai-* sweep: the machine-wide claim was taken before this point.
+  docker ps -aq --filter "name=^/mem0-server-" | xargs docker rm -f >/dev/null 2>&1 || true
+  docker network ls -q --filter "name=^mem0-server-net-" | xargs docker network rm >/dev/null 2>&1 || true
+
+  MEM0_SERVER_ROOT="$RUN_ROOT/mem0-server"
+  # Mounted AT /app/history: the server's SQLiteManager does a bare
+  # sqlite3.connect with NO makedirs and the image ships no such directory —
+  # boot-fatal without the mount.
+  mkdir -p "$MEM0_SERVER_ROOT/history"
+  build_mem0_server_image
+
+  local base="mem0-server-$(basename "$RUN_ROOT")"
+  MEM0_PG_CONTAINER="$base-pg"
+  MEM0_APP_CONTAINER="$base-app"
+  MEM0_SERVER_NET="$base-net"
+  # The pg password is a local throwaway credential, generated once per run
+  # root and REUSED on resume: the stock postgres entrypoint applies it only
+  # on first init, so a resumed run over the existing pg volume must present
+  # the original password. It lives only in the run root (output/ is
+  # gitignored) and rides docker -e NAME, never argv (rule 8).
+  local password_file="$MEM0_SERVER_ROOT/pg_password"
+  if [ -f "$password_file" ]; then
+    POSTGRES_PASSWORD="$(cat "$password_file")"
+  else
+    ( umask 077 && openssl rand -hex 16 > "$password_file" )
+    POSTGRES_PASSWORD="$(cat "$password_file")"
+  fi
+  export POSTGRES_PASSWORD
+
+  docker network create "$MEM0_SERVER_NET" >/dev/null || die "failed to create the mem0 server network"
+  # POSTGRES_DB=mem0_app: the entrypoint creates it on first init (the app DB
+  # alembic migrates); the default `postgres` database initdb always creates
+  # is the vector store's target — no init-db.sh mount needed either way.
+  docker run -d --name "$MEM0_PG_CONTAINER" --network "$MEM0_SERVER_NET" \
+    -e POSTGRES_USER=mem0 -e POSTGRES_PASSWORD -e POSTGRES_DB=mem0_app \
+    -v "$MEM0_SERVER_ROOT/pg:/var/lib/postgresql/data" \
+    pgvector/pgvector:pg17 >/dev/null || die "failed to start the pg container (pgvector/pgvector:pg17)"
+  local i
+  for i in $(seq 1 60); do
+    docker exec "$MEM0_PG_CONTAINER" pg_isready -U mem0 -d mem0_app >/dev/null 2>&1 && break
+    sleep 1
+    if [ "$i" = 60 ]; then
+      docker logs --tail 30 "$MEM0_PG_CONTAINER" >&2 || true
+      die "the mem0 server pg container did not become ready within 60s (logs above)"
+    fi
+  done
+
+  # Precreate the vector table at the roster's embedding dims BEFORE the
+  # server boots: the server's DEFAULT_CONFIG has no dims channel, so its
+  # eager create_col would otherwise birth the collection at the pgvector
+  # default (1536) and every insert would then fail with "expected 1536
+  # dimensions" — SILENTLY (the add still returns ADD receipts; only the
+  # container log shows the DataException). _ensure_collection skips an
+  # existing table, so this precreate is authoritative. The DDL mirrors the
+  # engine's own create_col (mem0/vector_stores/pgvector.py); the vector store
+  # connects to the default `postgres` database.
+  docker exec "$MEM0_PG_CONTAINER" psql -U mem0 -d postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE EXTENSION IF NOT EXISTS vector" \
+    -c "CREATE TABLE IF NOT EXISTS memories (id UUID PRIMARY KEY, vector vector(${EMBEDDING_DIMENSIONS}), payload JSONB)" \
+    >/dev/null || die "failed to precreate the mem0 memories table at ${EMBEDDING_DIMENSIONS} dims"
+
+  # The full boot env, covering the server's three import-time fatals: LLM
+  # creds (roster, /v1-normalized — honored at boot by BOTH the LLM and the
+  # embedder clients), the /app/history mount (above), and mem0_app existence
+  # (the pg container's POSTGRES_DB). Never enable auth without a JWT_SECRET
+  # (module-level RuntimeError at import) — the arm runs AUTH_DISABLED and the
+  # store sends no credentials. OPENAI_* are re-asserted from the roster here:
+  # the per-instance proxy env sourcing overwrites them later, and the
+  # container needs the /v1-normalized root regardless.
+  export OPENAI_API_KEY="$API_KEY"
+  export OPENAI_BASE_URL="$(openai_v1_root "$BASE_URL")"
+  docker run -d --name "$MEM0_APP_CONTAINER" --network "$MEM0_SERVER_NET" \
+    -p "127.0.0.1:${MEM0_SERVER_PORT}:8000" \
+    -v "$MEM0_SERVER_ROOT/history:/app/history" \
+    -e POSTGRES_HOST="$MEM0_PG_CONTAINER" -e POSTGRES_PORT=5432 -e POSTGRES_USER=mem0 -e POSTGRES_PASSWORD \
+    -e APP_DB_NAME=mem0_app -e AUTH_DISABLED=true -e MEM0_TELEMETRY=false \
+    -e OPENAI_API_KEY -e OPENAI_BASE_URL \
+    -e MEM0_DEFAULT_LLM_MODEL="$MODEL" -e MEM0_DEFAULT_EMBEDDER_MODEL="$EMBEDDING_MODEL" \
+    "$MEM0_SERVER_IMAGE" \
+    sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000" >/dev/null \
+    || die "failed to start the mem0 server container ($MEM0_SERVER_IMAGE)"
+  # The image CMD runs no migrations and carries the dev --reload flag; the
+  # override above runs alembic first and drops the flag.
+  for i in $(seq 1 180); do
+    if curl -sf "http://127.0.0.1:${MEM0_SERVER_PORT}/auth/setup-status" >/dev/null 2>&1; then
+      log "mem0 server stack ready ($MEM0_APP_CONTAINER, image $MEM0_SERVER_IMAGE)"
+      return 0
+    fi
+    sleep 1
+  done
+  docker logs --tail 50 "$MEM0_APP_CONTAINER" >&2 || true
+  die "mem0 server container did not become ready within 180s (logs above)"
+}
+
+configure_mem0_server() {
+  # Refine llm+embedder onto the roster upstreams. Belt-and-braces for the LLM
+  # leg (the boot env already points there) but LOAD-BEARING for the embedding
+  # leg whenever EMBEDDING_BASE_URL differs from the roster BASE_URL (the boot
+  # env carries a single OPENAI_BASE_URL). The payload deep-merges into the
+  # boot config, so vector_store/history survive. FAIL-FATAL on non-2xx.
+  # max_tokens 32000 (not the engine's 2000 default): reasoning-hybrid roster
+  # models (deepseek-v4-flash et al.) burn a small budget entirely on thinking
+  # — finish_reason=length with 0 output chars, and the extraction stores
+  # NOTHING while answering 200 (the trap the tencentdb gateway yaml documents;
+  # 32k matches its shipped deepseek value).
+  # Credentials ride curl stdin, never argv (rule 8).
+  if ! curl -sf -X POST "http://127.0.0.1:${MEM0_SERVER_PORT}/configure" -H 'Content-Type: application/json' --data-binary @- <<EOF
+{"llm": {"provider": "openai", "config": {"model": "$MODEL", "api_key": "$API_KEY", "openai_base_url": "$(openai_v1_root "$BASE_URL")", "max_tokens": 32000}}, "embedder": {"provider": "openai", "config": {"model": "$EMBEDDING_MODEL", "api_key": "$EMBEDDING_API_KEY", "openai_base_url": "$(openai_v1_root "$EMBEDDING_BASE_URL")", "embedding_dims": $EMBEDDING_DIMENSIONS}}}
+EOF
+  then
+    docker logs --tail 30 "$MEM0_APP_CONTAINER" >&2 || true
+    die "POST /configure failed (mem0 server mode) — the embedder would stay aimed at the roster LLM upstream"
+  fi
+  log "mem0 server configured (llm=$MODEL embedder=$EMBEDDING_MODEL)"
+}
+
+# selfcheck_mem0_server — the fail-closed canary: one verbatim add + search +
+# delete under a scratch user id proves the embedding leg (quartet upstream)
+# and the vector insert path end to end. Without it the silent-insert class
+# (e.g. a dims mismatch — the add returns ADD receipts while persisting
+# NOTHING) surfaces only as an empty store mid-arm.
+selfcheck_mem0_server() {
+  MEM0_SERVER_URL="http://127.0.0.1:${MEM0_SERVER_PORT}" uv run --project "$REPO_ROOT" python - <<'EOF' || { docker logs --tail 30 "$MEM0_APP_CONTAINER" >&2 || true; die "mem0 server self-check failed (see logs above)"; }
+import os
+
+from mem0_bridge.stores.server import ServerStore
+
+store = ServerStore(server_url=os.environ["MEM0_SERVER_URL"])
+receipts = store.add(
+    messages=[{"role": "user", "content": "canary: the mem0 server stack persists and indexes memories"}],
+    user_id="mem0-canary",
+    run_id="canary",
+    infer=False,  # verbatim: exercises the embedder + insert path without an LLM call
+)
+hits = store.search(query="canary persists indexes", user_id="mem0-canary", top_k=5, threshold=0.0)
+if not hits:
+    raise SystemExit("canary add was not searchable — the store is silently not persisting")
+for receipt in receipts:
+    if receipt.get("id"):
+        store.delete(receipt["id"])
+print(f"mem0 server self-check ok ({len(receipts)} added, {len(hits)} searchable, cleaned up)")
+EOF
+  log "mem0 server self-check passed"
+}
+
 # ---- Per-integration profile ----
 case "$INTEGRATION_NAME" in
   cure_memory)
@@ -380,13 +640,63 @@ case "$INTEGRATION_NAME" in
     write_recorder_env "EXTRACT"
     ;;
   mem0)
-    MEM0_ENV="$INTEGRATION/.env"
-    [ -f "$MEM0_ENV" ] || die "missing $MEM0_ENV (MEM0_API_KEY)"
-    set -a; source "$MEM0_ENV"; set +a
-    : "${MEM0_API_KEY:?MEM0_API_KEY must be set in $MEM0_ENV}"
-    # The hosted store is persistent across run roots: run isolation comes
-    # from a per-run user id minted from the timestamped run-root name.
     MEM0_USER_ID="minisweagent-mem0-$(basename "$RUN_ROOT")"
+    case "$MEM0_MODE" in
+      platform)
+        # The hosted store is persistent across run roots: run isolation comes
+        # from the per-run user id minted above. MEM0_API_KEY rides the root
+        # .env (load_model_env already exported it).
+        : "${MEM0_API_KEY:?MEM0_API_KEY must be set in $ENV_FILE (mem0 platform mode)}"
+        ;;
+      server)
+        require_mem0_embedding_quartet
+        # The machine-wide single-arm claim (port 8890 already makes concurrent
+        # mem0 server arms impossible; the claim enforces it at the process
+        # level). Same discipline as the tencentdb arm's claim — see that block
+        # for the full rationale (atomic mkdir, dead-pid takeover, per-user
+        # TMPDIR). Claimed before the recorder .env is regenerated too.
+        MEM0_ARM_CLAIM="${TMPDIR:-/tmp}/mem0-arm-claim"
+        MEM0_CLAIM_WAITS=0
+        while ! mkdir "$MEM0_ARM_CLAIM" 2>/dev/null; do
+          MEM0_CLAIM_PID="$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null || true)"
+          if [ -n "$MEM0_CLAIM_PID" ]; then
+            if kill -0 "$MEM0_CLAIM_PID" 2>/dev/null || ps -p "$MEM0_CLAIM_PID" >/dev/null 2>&1; then
+              die "another mem0 server arm driver (pid $MEM0_CLAIM_PID) holds the machine-wide claim; port $MEM0_SERVER_PORT and the mem0-server-* containers belong to it — let it finish or stop it first"
+            fi
+            rm -rf "$MEM0_ARM_CLAIM"  # dead holder: stale takeover
+            continue
+          fi
+          MEM0_CLAIM_WAITS=$((MEM0_CLAIM_WAITS + 1))
+          if [ "$MEM0_CLAIM_WAITS" -ge 50 ]; then
+            rm -rf "$MEM0_ARM_CLAIM"  # a holder that never writes its pid died mid-acquire
+            MEM0_CLAIM_WAITS=0
+          fi
+          sleep 0.1
+        done
+        printf '%s\n' "$$" > "$MEM0_ARM_CLAIM/pid"
+        # Registered BEFORE the stack starts: a health-timeout die must not
+        # leak the containers or the claim. Plain docker rm -f on exit: the
+        # store lives on the host volumes (<run-root>/mem0-server), so a resume
+        # recreates the stack over the same store. The container/net names are
+        # unset until start_mem0_server_stack — default-expand them so a die
+        # before that point never trips set -u inside the trap.
+        trap 'if [ "$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$MEM0_ARM_CLAIM"; fi; docker rm -f ${MEM0_APP_CONTAINER:-} ${MEM0_PG_CONTAINER:-} >/dev/null 2>&1 || true; docker network rm ${MEM0_SERVER_NET:-} >/dev/null 2>&1 || true' EXIT
+        start_mem0_server_stack
+        configure_mem0_server
+        selfcheck_mem0_server
+        export MEM0_SERVER_URL="http://127.0.0.1:${MEM0_SERVER_PORT}"
+        ;;
+      library)
+        require_mem0_embedding_quartet
+        # In-process engine: the opt-in dependency group rides every instance
+        # invocation (a plain `uv run` is inexact but NOT additive — without
+        # this every library-mode instance dies on `import mem0`), telemetry is
+        # off (posthog phone-home hygiene), and the store lands under the run
+        # root via the agent.memory.run_root extra in run_instance_mem0.
+        export MEM0_TELEMETRY=false
+        ARM_UV_ARGS=(--group mem0-library)
+        ;;
+    esac
     resolve_recorder
     write_recorder_env "MEMORY"
     ;;
@@ -647,8 +957,24 @@ run_instance_annotate_lane() {
       --config agent.memory.output_dir="$IDIR"
   )
   local extra
-  for extra in "$@"; do cfg+=(--config "$extra"); done
-  ( cd "$MINI_SWE_AGENT" && uv run --project "$REPO_ROOT" \
+  for extra in "$@"; do
+    # The mem0 mode is yaml-owned (read_mem0_mode): a --config extra carrying
+    # it would override the bridge's mode while the driver still branches on
+    # the yaml value — refuse the divergence loudly (extra="forbid" only
+    # rejects unknown keys, not a known key overridden this way).
+    case "$extra" in
+      agent.memory.mode=*)
+        log "FATAL $ID: agent.memory.mode is yaml-owned — never pass it via --config extras"
+        stop_proxy
+        return 1
+        ;;
+    esac
+    cfg+=(--config "$extra")
+  done
+  # ARM_UV_ARGS: the arm profile's extra `uv run` arguments (the mem0 library
+  # mode passes --group mem0-library — a plain `uv run` is inexact but NOT
+  # additive, so without it every library-mode instance dies on import mem0).
+  ( cd "$MINI_SWE_AGENT" && uv run --project "$REPO_ROOT" ${ARM_UV_ARGS[@]+"${ARM_UV_ARGS[@]}"} \
       python -m "$MODULE" \
       --subset verified --split test --filter "^${ID}$" --workers 1 --redo-existing \
       --model "$MODEL_NAME" \
@@ -664,8 +990,21 @@ run_instance_annotate_lane() {
 }
 
 run_instance_mem0() {
-  # The hosted platform does the extraction; isolation is the per-run user id.
-  run_instance_annotate_lane "$1" mem0_bridge.run.swebench "$MEM0_USER_ID"
+  # All three modes share the annotate-lane body and the per-run user id.
+  # platform: the hosted service does the extraction. server: the per-run
+  # container does it against the provider upstream (MEM0_SERVER_URL is
+  # exported at profile time); its search_timeout is raised because one
+  # bridge→server HTTP call hides the embedder round-trips plus the hybrid
+  # CPU work — a slow embedding upstream otherwise surfaces as search_errors
+  # at the shared 10 s default. library: the in-process engine does it —
+  # run_root anchors the per-run store and ARM_UV_ARGS carries the opt-in
+  # dependency group.
+  local -a extra=()
+  case "$MEM0_MODE" in
+    server) extra=("agent.memory.search_timeout=30") ;;
+    library) extra=("agent.memory.run_root=$RUN_ROOT") ;;
+  esac
+  run_instance_annotate_lane "$1" mem0_bridge.run.swebench "$MEM0_USER_ID" ${extra[@]+"${extra[@]}"}
 }
 
 run_instance_tencentdb() {
@@ -682,7 +1021,7 @@ run_instance() {
   "run_instance_$INTEGRATION_NAME" "$@"
 }
 
-log "MEMORY-ARM-START root=$RUN_ROOT model=$MODEL_NAME integration=$INTEGRATION_NAME${MEM0_USER_ID:+ user_id=$MEM0_USER_ID}${TDAI_USER_ID:+ user_id=$TDAI_USER_ID embedding=$TDAI_EMBEDDING_PROVIDER}"
+log "MEMORY-ARM-START root=$RUN_ROOT model=$MODEL_NAME integration=$INTEGRATION_NAME${MEM0_MODE:+ mode=$MEM0_MODE}${MEM0_USER_ID:+ user_id=$MEM0_USER_ID}${TDAI_USER_ID:+ user_id=$TDAI_USER_ID embedding=$TDAI_EMBEDDING_PROVIDER}"
 
 # ---- Phase 1: predictions ----
 # (the validity probe and the rule-3 resume guard ran up front, before any

@@ -26,8 +26,8 @@ memory-bridge 附带三个内置集成，并支持以 `integration/` 下的独�
   <td><a href="cure-memory.md">cure-memory</a></td>
 </tr>
 <tr>
-  <td><strong>mem0 Platform</strong></td>
-  <td>通过 mem0 Platform REST API 进行托管提取。零基础设施的记忆管理。</td>
+  <td><strong>mem0</strong></td>
+  <td>mem0 的三种部署模式：托管 Platform、每 run 自托管 OSS server 或进程内 library。任何模式下提取都不进入轨迹。</td>
   <td><code>mem0</code></td>
   <td><a href="mem0-platform.md">mem0-platform</a></td>
 </tr>
@@ -43,13 +43,13 @@ memory-bridge 附带三个内置集成，并支持以 `integration/` 下的独�
 
 | 特性 | CURE | mem0 | tencentdb |
 |---|---|---|---|
-| **存储** | 本地 SQLite | 托管平台 | 每 run 一个 MemoryCore 容器（SQLite + FTS5） |
-| **提取** | 专用 LLM（EXTRACT lane） | 平台端 | 服务端流水线（直连提供商上游） |
+| **存储** | 本地 SQLite | 托管平台、每 run server 容器或进程内存储（按模式） | 每 run 一个 MemoryCore 容器（SQLite + FTS5） |
+| **提取** | 专用 LLM（EXTRACT lane） | 引擎侧：托管 / 容器内 / 进程内（按模式） | 服务端流水线（直连提供商上游） |
 | **代理 lane** | MAIN + EXTRACT + QUERY | MAIN + MEMORY（零模型调用）+ QUERY | MAIN + MEMORY（零模型调用）+ QUERY |
-| **运行隔离** | run-root SQLite 文件 | 每次运行的 `user_id` | 每 run `user_id` + 全新容器数据卷 |
+| **运行隔离** | run-root SQLite 文件 | 每次运行的 `user_id`（server/library 模式下另有全新每 run 存储） | 每 run `user_id` + 全新容器数据卷 |
 | **作用域支持** | 两层适用性结构（仓库级 + 通用） | 用户级（无桥接端作用域） | 原生两层（`task_id` 仓库 + team/agent 通用） |
 | **端点适配器** | `CureMemoryEndpoint` | `Mem0Endpoint` | `TencentDBEndpoint` |
-| **依赖** | 标准库 + pydantic | httpx（无 `mem0ai` SDK） | httpx + pyyaml（无上游 SDK；需 Docker） |
+| **依赖** | 标准库 + pydantic | httpx（`mem0ai` 仅经可选依赖组 `mem0-library`，library 模式） | httpx + pyyaml（无上游 SDK；需 Docker） |
 
 ## 搜索语义
 

@@ -26,7 +26,7 @@
 
 * [Overview](integrations/overview.md)
 * [CURE Memory](integrations/cure-memory.md)
-* [mem0 Platform](integrations/mem0-platform.md)
+* [mem0](integrations/mem0-platform.md)
 * [TencentDB Agent Memory](integrations/tencentdb.md)
 * [Adding an Integration](integrations/adding-an-integration.md)
 

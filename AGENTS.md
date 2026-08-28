@@ -44,7 +44,7 @@ mini-swe-agent/                   # prediction runner checkout (keeps its own .v
 shared-bridge/src/shared_bridge/  # GENERIC components: agent hooks, BaseMemoryBackend lifecycle skeleton, config.py (MemoryConfig), run factory, annotate transport, endpoint contract + stdlib HTTP front, testing.py (the suites' shared capture server), prompts.py + side_model.py
 shared-bridge/tests/              # generic suites (fake reference integration) + the zero-integration-naming scan
 integration/cure_memory/          # CURE integration (own AGENTS.md): src/cure_memory (the CURE memory system), src/cure_memory_bridge (backend/agent glue + endpoint adapter), configs/, tests/
-integration/mem0/                 # mem0 Platform integration (own AGENTS.md): src/mem0_bridge (REST client, backend, agent glue, endpoint), configs/, tests/
+integration/mem0/                 # mem0 integration, three deployment modes — platform/server/library (own AGENTS.md + VENDORING.md): src/mem0_bridge (stores/ — the per-mode Mem0Store implementations: platform REST client, OSS server client, in-process library — plus backend, agent glue, endpoint), configs/ (memory_defaults.yaml carries the anchored mode: line), tests/, vendor/mem0 (gitignored vendored clone, never committed)
 integration/tencentdb/            # TencentDB-Agent-Memory integration (own AGENTS.md + VENDORING.md): src/tencentdb_bridge (gateway REST client, backend, agent glue, endpoint), src/TencentDB-Agent-Memory (gitignored vendored clone, never committed), configs/, tests/ (a tencentdb.tests package)
 utils/                            # all pipeline scripts (utils/README.md says what each does)
 docs/                             # GitBook-ready documentation site (en/ + zh/ mirrors)
@@ -69,13 +69,17 @@ lane shares the flat `BASE_URL` — a separate QUERY upstream would need the
 per-role `BASE_URL` roster form, which the driver deliberately does not wire),
 plus the shared checkouts SWE-bench/ (local Docker harness) and
 extension/traj-recorder/ (trajectory proxy, memory arm only), resolved
-bundle-first then parent workspace, `MEM0_API_KEY` in
-integration/mem0/.env for the mem0 arm, and for the tencentdb arm an
-optional all-or-none embedding quartet in the roster `.env`
+bundle-first then parent workspace, `MEM0_API_KEY` in the bundle root's own
+`.env` (mem0 platform mode only), and the embedding quartet
 (`EMBEDDING_MODEL` / `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` /
-`EMBEDDING_DIMENSIONS` — a partial set is silently disabled upstream, so
-the driver refuses it; the arm needs Docker running and pulls
-`agentmemory/memory-core:1.0.1-beta.1`). Prerequisites: `uv` on PATH; Docker
+`EMBEDDING_DIMENSIONS` in the roster `.env`): REQUIRED and fail-closed for
+the mem0 server/library modes (the OSS engine embeds on every add/search,
+no lexical fallback), optional all-or-none for the tencentdb arm (a partial
+set is silently disabled upstream, so the driver refuses it). The mem0
+server mode and the tencentdb arm need Docker running — tencentdb pulls
+`agentmemory/memory-core:1.0.1-beta.1`, mem0 server builds its stack from
+the vendored clone (127.0.0.1:8890 is a per-machine single-arm lock, as is
+tencentdb's 8420). Prerequisites: `uv` on PATH; Docker
 installed and running (`docker info` succeeds); `uv sync` has created the
 shared env.
 
@@ -119,8 +123,11 @@ shared env.
 2. The one shared env is the only dependency source. `shared-bridge`
    rides stdlib + pydantic alone, with `minisweagent` imported lazily
    (the run factory, the `__init__` agent shim) so the endpoint contract
-   stays importable without the benchmark stack; the mem0 client uses the
-   httpx the env already carries for litellm — never the `mem0ai` SDK.
+   stays importable without the benchmark stack; the mem0 platform/server
+   clients use the httpx the env already carries for litellm — never the
+   `mem0ai` SDK (only mem0 library mode imports `mem0ai`, and only via the
+   opt-in `mem0-library` dependency group, which never enters
+   default-groups, so the shared env stays mem0ai-free).
 3. Failure discipline is part of the style: bridge code fails closed —
    nothing raises into the agent loop unless `strict: true`,
    `note_recall` never raises at all, and annotation failures degrade to
@@ -300,14 +307,25 @@ head -2 instance-ids.txt > /tmp/first2-ids.txt   # any slice you want
   artifacts (`proxy.log`, `<id>/trajectory/` — paths relative to
   `runs/mini-swe-agent/<id>/`). The driver regenerates
   the recorder's `.env` from the provider `.env` each run.
-- **`mem0`** — extraction runs on the hosted platform, but the arm runs the
-  same per-instance roster proxy (MAIN lane = benchmark model; MEMORY lane =
-  the memory-annotate namespace, which makes zero model calls — the bridge
-  posts the schema-v6 memory protocol to it from the platform's own
-  receipts; QUERY lane = the recall-query rewriter, as on the cure arm);
-  run isolation comes from a per-run user id minted from the timestamped
-  run-root name, and `MEM0_API_KEY` is read from
-  `integration/mem0/.env`.
+- **`mem0`** — three deployment modes, selected by the anchored `mode:`
+  line in `integration/mem0/configs/memory_defaults.yaml` (yaml-owned: the
+  driver reads the same line and refuses `--config agent.memory.mode=`
+  extras). **`platform`** (default) talks to the hosted API and needs
+  `MEM0_API_KEY` in the bundle-root `.env`. **`server`** runs a per-run
+  self-hosted OSS stack — two containers (pgvector plus the API server
+  built from the vendored clone, engine pinned `mem0ai==2.0.19`) on one
+  bridge network at `127.0.0.1:8890` under a machine-wide single-arm claim,
+  store volumes under `<run-root>/mem0-server/`, and a fail-closed
+  `EMBEDDING_*` quartet requirement. **`library`** runs the `mem0ai` engine
+  in-process via the opt-in `mem0-library` dependency group (the driver
+  carries `--group mem0-library` on every instance invocation), store under
+  `<run-root>/mem0/`, same quartet requirement. Every mode runs the same
+  per-instance roster proxy (MAIN lane = benchmark model; MEMORY lane =
+  the memory-annotate namespace, which makes zero model calls — extraction
+  runs off-trajectory: hosted by the platform, inside the server
+  container, or in-process; QUERY lane = the recall-query rewriter, as on
+  the cure arm); run isolation comes from a per-run user id minted from
+  the timestamped run-root name.
 - **`tencentdb`** — one MemoryCore container per run root
   (`agentmemory/memory-core:1.0.1-beta.1`, port `127.0.0.1:8420`, data
   volume `<run-root>/tdai/data`, credential-free generated gateway yaml
@@ -389,11 +407,12 @@ pure mini-swe-agent code, so it keeps using `mini-swe-agent/`'s own env
    (`run-evaluation.sh`), never `sb-cli`.
 7. Don't evaluate until merge passes — a missing/empty patch makes the
    report denominator misleading.
-8. Keep `MEM0_API_KEY` (mem0 arm) in the environment or the integration
-   `.env`, never on the command line. The cure arm's `EXTRACT_*` need no
-   user provisioning at all — the driver exports them per instance from
-   the EXTRACT proxy lane (they remain backend fallbacks outside the
-   driver, where the same keep-them-off-the-command-line rule applies).
+8. Keep `MEM0_API_KEY` (mem0 platform mode) in the environment or the
+   bundle-root `.env`, never on the command line. The cure arm's
+   `EXTRACT_*` need no user provisioning at all — the driver exports them
+   per instance from the EXTRACT proxy lane (they remain backend fallbacks
+   outside the driver, where the same keep-them-off-the-command-line rule
+   applies).
 
 # Relationship to the original workspace
 

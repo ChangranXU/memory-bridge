@@ -44,8 +44,12 @@ class MemoryConfig(BaseModel):
     max_chars_per_memory: int = Field(default=0, ge=0)  # cap on one rendered line (content + provenance suffix); 0 = off (the native default)
     max_total_recall_chars: int = Field(default=2000, ge=0)  # total over the delivered lines; 2000 preserves the shipped arm behavior — the native default-off is deliberately not adopted (pin 0 for it)
     # Bound on one native search call. Implemented only where the search is a
-    # network call (a hosted platform): an in-process lexical search cannot be
-    # interrupted cleanly, so a local deadline would be theater.
+    # network call (a hosted platform, or a bridge→server HTTP hop): an
+    # in-process search cannot be interrupted cleanly, so a local deadline
+    # would be theater. An in-process engine mode therefore ignores this
+    # bound — where the engine's own LLM/embedder calls carry no timeout knob
+    # and no SDK env override exists, the effective network bound is the
+    # engine SDK's default (recorded in that integration's docs).
     search_timeout: float = Field(default=10.0, gt=0)
     # Relevance floor: hits scoring below it (or carrying no score) are dropped
     # before any quantity bound; None disables the floor. The scale is

@@ -28,7 +28,7 @@ description: 为编程智能体设计的可插拔记忆层，具有失效封闭�
 </tr>
 <tr>
   <td><strong>三个集成</strong></td>
-  <td>CURE（本地 SQLite + 提取 LLM）、mem0 Platform（托管提取）与 TencentDB-Agent-Memory（MemoryCore 容器，服务端提取，三个注入召回层加按需对话搜索）。只需一个包即可添加自己的集成。</td>
+  <td>CURE（本地 SQLite + 提取 LLM）、mem0（托管 Platform、自托管 OSS server 或进程内 library）与 TencentDB-Agent-Memory（MemoryCore 容器，服务端提取，三个注入召回层加按需对话搜索）。只需一个包即可添加自己的集成。</td>
   <td><a href="integrations/overview.md">overview</a></td>
 </tr>
 <tr>
@@ -56,5 +56,5 @@ description: 为编程智能体设计的可插拔记忆层，具有失效封闭�
 | [SWE-bench](https://www.swebench.com/) | 基准测试套件与本地 Docker 评测框架 |
 | [traj-recorder](https://github.com/ChangranXU/traj-recorder/tree/memory) | 带 roster lane 与 annotate 端点的录制代理 |
 | [CURE 记忆系统](https://github.com/staymylove/CURE_memory_system) | `cure_memory` 集成中内嵌的上游记忆系统 |
-| [mem0 Platform](https://github.com/mem0ai/mem0) | `mem0` 集成背后的托管记忆平台 |
+| [mem0](https://github.com/mem0ai/mem0) | `mem0` 集成背后的记忆系统（托管 Platform、OSS server 或进程内 library） |
 | [TencentDB-Agent-Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | `tencentdb` 集成背后的上游记忆系统（MemoryCore 网关） |

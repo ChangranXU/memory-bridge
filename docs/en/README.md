@@ -28,7 +28,7 @@ Currently integrated with [mini-swe-agent](https://github.com/SWE-agent/mini-swe
 </tr>
 <tr>
   <td><strong>Three integrations</strong></td>
-  <td>CURE (local SQLite + extraction LLM), mem0 Platform (hosted extraction), and TencentDB-Agent-Memory (MemoryCore container, server-side extraction, three injected recall layers plus an on-demand conversation search). Add your own with one package.</td>
+  <td>CURE (local SQLite + extraction LLM), mem0 (hosted Platform, self-hosted OSS server, or in-process library), and TencentDB-Agent-Memory (MemoryCore container, server-side extraction, three injected recall layers plus an on-demand conversation search). Add your own with one package.</td>
   <td><a href="integrations/overview.md">overview</a></td>
 </tr>
 <tr>
@@ -56,5 +56,5 @@ Currently integrated with [mini-swe-agent](https://github.com/SWE-agent/mini-swe
 | [SWE-bench](https://www.swebench.com/) | Benchmark suite and local Docker evaluation harness |
 | [traj-recorder](https://github.com/ChangranXU/traj-recorder/tree/memory) | Recording proxy with roster lanes and the annotate endpoint |
 | [CURE memory system](https://github.com/staymylove/CURE_memory_system) | The upstream memory system embedded in the `cure_memory` integration |
-| [mem0 Platform](https://github.com/mem0ai/mem0) | The hosted memory platform behind the `mem0` integration |
+| [mem0](https://github.com/mem0ai/mem0) | The memory system behind the `mem0` integration (hosted Platform, OSS server, or in-process library) |
 | [TencentDB-Agent-Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | The upstream memory system behind the `tencentdb` integration (MemoryCore gateway) |

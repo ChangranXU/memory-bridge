@@ -31,7 +31,7 @@ All memory settings live under `agent.memory.*` in `MemoryConfig`. Unknown keys 
 | `extraction_guidelines` | `str` | `""` | Extraction policy text. `""` uses the shared default; non-empty replaces it wholesale. |
 
 {% hint style="info" %}
-Extraction guidelines are conveyed through the integration's native channel. The CURE integration appends them to its `MEMORY_POLICY_PROMPT`; mem0 sends them as `custom_instructions` on the add endpoint. Integrations whose engine accepts no custom prompt rules ignore the field (the tencentdb backend declares no channel: its stored-prompt route is scope-keyed and its extraction is async, so per-episode context cannot ride it).
+Extraction guidelines are conveyed through the integration's native channel. The CURE integration appends them to its `MEMORY_POLICY_PROMPT`; mem0 sends them as the add call's advisory instructions (`custom_instructions` on the platform, `prompt` on the OSS surfaces). Integrations whose engine accepts no custom prompt rules ignore the field (the tencentdb backend declares no channel: its stored-prompt route is scope-keyed and its extraction is async, so per-episode context cannot ride it).
 {% endhint %}
 
 ## Recall
@@ -89,11 +89,11 @@ API=openai-chat
 | `EXTRACT_MODEL` | CURE extraction model. Backend fallback only: the memory-arm driver overrides all three `EXTRACT_*` values per instance from the EXTRACT proxy lane, and the `agent.memory.extract_*` config fields take precedence over these env vars. |
 | `EXTRACT_BASE_URL` | CURE extraction endpoint (same fallback semantics as `EXTRACT_MODEL`). |
 | `EXTRACT_API_KEY` | CURE extraction API key (same fallback semantics as `EXTRACT_MODEL`). |
-| `EMBEDDING_MODEL` | tencentdb embedding model. Part of an all-or-none quartet with `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, and `EMBEDDING_DIMENSIONS` — the memory-arm driver refuses a partial set (upstream would silently disable it). |
-| `EMBEDDING_API_KEY` | tencentdb embedding API key (part of the all-or-none quartet — see `EMBEDDING_MODEL`). |
-| `EMBEDDING_BASE_URL` | tencentdb embedding endpoint (part of the all-or-none quartet — see `EMBEDDING_MODEL`). |
-| `EMBEDDING_DIMENSIONS` | tencentdb embedding dimensions (part of the all-or-none quartet — see `EMBEDDING_MODEL`). |
-| `MEM0_API_KEY` | mem0 Platform API key (in `integration/mem0/.env`). |
+| `EMBEDDING_MODEL` | Embedding model. Part of a quartet with `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, and `EMBEDDING_DIMENSIONS`: optional all-or-none for the tencentdb arm (the driver refuses a partial set — upstream would silently disable it); **required** (fail-closed) for the mem0 server/library modes. |
+| `EMBEDDING_API_KEY` | Embedding API key (part of the quartet — see `EMBEDDING_MODEL`). |
+| `EMBEDDING_BASE_URL` | Embedding endpoint (part of the quartet — see `EMBEDDING_MODEL`). |
+| `EMBEDDING_DIMENSIONS` | Embedding dimensions (part of the quartet — see `EMBEDDING_MODEL`). |
+| `MEM0_API_KEY` | mem0 Platform API key (bundle-root `.env`; platform mode only). |
 
 {% hint style="warning" %}
 Credentials stay in pydantic fields with `exclude=True, repr=False`. Only sanitized URLs reach artifacts and logs — userinfo/query/fragment stripped, trajectory IDs replaced by their 16-hex hash prefix.

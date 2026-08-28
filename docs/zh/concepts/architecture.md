@@ -24,7 +24,7 @@ graph TB
 
     subgraph "integration/"
         cure["cure_memory/<br/>本地 SQLite + 提取 LLM"]
-        mem0["mem0/<br/>mem0 Platform（托管）"]
+        mem0["mem0/<br/>mem0（platform / server / library）"]
         tencentdb["tencentdb/<br/>MemoryCore 容器"]
     end
 
@@ -66,7 +66,7 @@ memory-bridge/
 │   └── run.py         bind_swebench_app()：重绑运行器的智能体类
 ├── integration/       每个记忆系统一个包，绑定到 shared-bridge
 │   ├── cure_memory/   本地 SQLite 存储 + 独立提取 LLM
-│   ├── mem0/          mem0 Platform（托管提取，httpx REST 客户端）
+│   ├── mem0/          mem0（三种模式：托管平台、OSS server 容器、进程内 library）
 │   └── tencentdb/     TencentDB-Agent-Memory（每 run root 一个 MemoryCore 容器）
 ├── utils/             流水线脚本（setup → predict → merge → evaluate → summarize）
 ├── mini-swe-agent/    预测运行器检出（保留自己的工具 venv）

@@ -9,7 +9,7 @@ This guide walks you through setting up memory-bridge, running a memory-augmente
 ## Prerequisites
 
 {% hint style="info" %}
-Make sure all prerequisites are installed before proceeding. Both arms require Docker for predictions and evaluation; the tencentdb memory arm additionally runs its MemoryCore container in Docker.
+Make sure all prerequisites are installed before proceeding. Both arms require Docker for predictions and evaluation; the tencentdb memory arm additionally runs its MemoryCore container in Docker, and mem0's `server` mode runs its own two-container stack.
 {% endhint %}
 
 * Python 3.10+
@@ -49,11 +49,13 @@ API=openai-chat
 
 The CURE arm wires its extraction lane automatically through the per-instance proxy, reusing `MODEL` — no extra `.env` keys needed. (The `EXTRACT_*` environment variables remain backend fallbacks when the integration runs outside the arm driver; see [Configuration](configuration.md).)
 
-For the mem0 arm, create `integration/mem0/.env`:
+For the mem0 arm in `platform` mode, add the platform key to the same root `.env`:
 
 ```dotenv
 MEM0_API_KEY=m0-...
 ```
+
+The mem0 `server` and `library` modes need no platform key but require the full embedding quartet (`EMBEDDING_MODEL` / `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_DIMENSIONS`) in the root `.env` — the arm fails closed when the set is incomplete.
 {% endstep %}
 
 {% step %}
@@ -111,7 +113,7 @@ The CURE arm uses a local SQLite store with a dedicated extraction LLM. Per-inst
 ./utils/run-memory-arm.sh mem0
 ```
 
-The mem0 arm uses the hosted mem0 Platform for extraction. Requires `MEM0_API_KEY` in `integration/mem0/.env`.
+The mem0 arm runs in the deployment mode selected by the anchored `mode:` line in `integration/mem0/configs/memory_defaults.yaml`: `platform` (default; hosted API — needs `MEM0_API_KEY` in the root `.env`), `server` (per-run OSS containers — needs Docker plus the `EMBEDDING_*` quartet), or `library` (in-process engine via the opt-in `mem0-library` group — needs the quartet).
 {% endtab %}
 
 {% tab title="tencentdb" %}

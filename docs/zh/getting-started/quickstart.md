@@ -9,7 +9,7 @@ description: 10 分钟内启动并运行 memory-bridge。
 ## 前置条件
 
 {% hint style="info" %}
-在继续之前，请确保所有前置条件已安装。两个臂的预测和评测都需要 Docker；tencentdb 记忆臂还需在 Docker 中运行其 MemoryCore 容器。
+在继续之前，请确保所有前置条件已安装。两个臂的预测和评测都需要 Docker；tencentdb 记忆臂还需在 Docker 中运行其 MemoryCore 容器，mem0 的 `server` 模式也会运行自己的双容器栈。
 {% endhint %}
 
 * Python 3.10+
@@ -49,11 +49,13 @@ API=openai-chat
 
 CURE 臂会通过每实例代理自动接入其提取 lane，复用 `MODEL`——无需额外的 `.env` 键。（当集成在记忆臂驱动器之外运行时，`EXTRACT_*` 环境变量仍是后端回退；参见 [配置参考](configuration.md)。）
 
-对于 mem0 臂，创建 `integration/mem0/.env`：
+对于 mem0 臂的 `platform` 模式，将平台密钥加入同一个根目录 `.env`：
 
 ```dotenv
 MEM0_API_KEY=m0-...
 ```
+
+mem0 的 `server` 与 `library` 模式不需要平台密钥，但要求根目录 `.env` 中配置完整的 embedding 四元组（`EMBEDDING_MODEL` / `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_DIMENSIONS`）——不完整时臂失效封闭。
 {% endstep %}
 
 {% step %}
@@ -111,7 +113,7 @@ CURE 臂使用本地 SQLite 存储和专用提取 LLM。每个实例会启动一
 ./utils/run-memory-arm.sh mem0
 ```
 
-mem0 臂使用托管的 mem0 Platform 进行提取。需要在 `integration/mem0/.env` 中设置 `MEM0_API_KEY`。
+mem0 臂以 `integration/mem0/configs/memory_defaults.yaml` 中带锚定的 `mode:` 行所选的部署模式运行：`platform`（默认；托管 API——需要根目录 `.env` 中的 `MEM0_API_KEY`）、`server`（每 run OSS 容器——需要 Docker 及 `EMBEDDING_*` 四元组）或 `library`（经可选依赖组 `mem0-library` 的进程内引擎——需要四元组）。
 {% endtab %}
 
 {% tab title="tencentdb" %}

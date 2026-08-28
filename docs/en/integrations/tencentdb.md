@@ -65,7 +65,7 @@ Run isolation is a per-run `user_id` (minted from the run-root name) **plus** th
 
 Extraction runs server-side (threshold-batched: warmup 1→2→4→then every 5 user-rounds; a 30 s L1 idle timer catches the below-threshold tail). The bridge flushes buffered messages as chunked `conversation/add`, drains `l1.idle` within a dedicated budget, and resolves produced ids via a timestamp watermark query. The finalize drain is idle-timer-aware so the episode tail lands before the next instance starts.
 
-Extraction LLM traffic goes directly to the provider upstream (not recorded in the trajectory — same treatment as mem0's hosted extraction). Reasoning-hybrid models need `maxTokens` large enough that thinking does not consume the whole budget (the driver pins 32k/300 s, raising the upstream standalone shipped default of 4096/120 s).
+Extraction LLM traffic goes directly to the provider upstream (not recorded in the trajectory — same treatment as mem0's off-trajectory extraction in every mode). Reasoning-hybrid models need `maxTokens` large enough that thinking does not consume the whole budget (the driver pins 32k/300 s, raising the upstream standalone shipped default of 4096/120 s).
 
 ## Endpoint mapping
 

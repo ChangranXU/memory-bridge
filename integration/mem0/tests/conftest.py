@@ -17,7 +17,10 @@ class FakeMem0Store:
     """Offline duck-type stand-in for a Mem0Store (platform-shaped rows).
 
     Behaves like the mem0 surface the backend/endpoint use: add returns one
-    ADD receipt per message (or the scripted error), search returns the user's
+    receipt per message (or the scripted error) and persists what the
+    scripted event claims — ADD inserts, UPDATE rewrites the user's latest
+    row, DELETE removes it, NONE persists nothing — so the state snapshots
+    the backend's audit takes see honest effects. Search returns the user's
     memories in insertion order, and unknown ids 404.
     """
 
@@ -49,18 +52,36 @@ class FakeMem0Store:
             raise self.add_error
         results = []
         for message in messages:
-            memory_id = f"m{len(self.memories) + 1}"
-            self.memories[memory_id] = {
-                "id": memory_id,
-                "memory": f"fact: {message['content'][:40]}",
-                "user_id": user_id,
-                "run_id": run_id,
-                "score": 0.9,
-                "metadata": {},
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z",
-            }
-            results.append({"id": memory_id, "memory": self.memories[memory_id]["memory"], "event": self.add_event})
+            event = self.add_event
+            target = None
+            if event in ("UPDATE", "DELETE"):
+                # The engine acts on an existing row of this user; with none
+                # the scripted event falls back to a plain insert so the
+                # receipt still carries an id.
+                target = next((m for m in reversed(list(self.memories.values())) if m["user_id"] == user_id), None)
+            if event == "NONE":
+                # Deduped/ignored fact: the platform persists nothing.
+                results.append({"id": None, "memory": None, "event": "NONE"})
+            elif event == "UPDATE" and target is not None:
+                target["memory"] = f"fact: {message['content'][:40]}"
+                target["updated_at"] = "2026-01-02T00:00:00Z"
+                results.append({"id": target["id"], "memory": target["memory"], "event": "UPDATE"})
+            elif event == "DELETE" and target is not None:
+                del self.memories[target["id"]]
+                results.append({"id": target["id"], "memory": None, "event": "DELETE"})
+            else:
+                memory_id = f"m{len(self.memories) + 1}"
+                self.memories[memory_id] = {
+                    "id": memory_id,
+                    "memory": f"fact: {message['content'][:40]}",
+                    "user_id": user_id,
+                    "run_id": run_id,
+                    "score": 0.9,
+                    "metadata": {},
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+                results.append({"id": memory_id, "memory": self.memories[memory_id]["memory"], "event": event})
         return results
 
     def search(self, *, query, user_id, top_k=10, threshold=0.0, timeout=None):

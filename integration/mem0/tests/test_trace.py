@@ -1,11 +1,15 @@
 """The mem0 arm's schema-v6 trace surface: platform receipts become generation
-changes (native_receipt evidence, partial completeness), recalls become search
-+ delivery — all against the real capture server with the scripted platform
-client. The protocol machinery itself is pinned generically in
-shared-bridge/tests/test_trace.py; here only the mem0 adapter shapes.
+changes (native_receipt evidence, partial completeness), cross-checked against
+the before/after state snapshot — which is also the exception path's only
+evidence — and recalls become search + delivery, all against the real capture
+server with the scripted platform client. The protocol machinery itself is
+pinned generically in shared-bridge/tests/test_trace.py; here only the mem0
+adapter shapes.
 """
 
 import hashlib
+
+import httpx
 
 from mem0_bridge.backend import Mem0Backend
 from mem0_bridge.client import Mem0ApiError
@@ -96,14 +100,14 @@ def test_add_receipts_become_create_changes(traced_backend, capture_server):
     assert ref["namespace"] == backend._namespace
     assert ref["content"]["text"] == "fact: hello"  # the receipt text, not the input
     assert change["evidence"] == "native_receipt"
-    assert change["completeness"] == "partial"  # no before-image on the hosted store
+    assert change["completeness"] == "partial"  # the receipt payload carries no before-image
     assert change["extensions"]["mem0"] == {"event": "ADD"}
     assert (change["change_index"], change["change_count"]) == (0, 1)
     (end,) = _ends(capture_server)
     assert end["status"] == "completed"
     assert [r["version_id"] for r in end["produced"]] == [ref["version_id"]]
     assert end["change_count"] == 1 and end["error_codes"] == []
-    assert end["state_evidence"] == "unknown"  # no snapshots on the hosted store
+    assert end["state_evidence"] == "complete"  # the receipts and the observed diff agree
     mem0 = end["extensions"]["mem0"]
     assert (mem0["added"], mem0["updated"], mem0["deleted"], mem0["none"]) == (1, 0, 0, 0)
     assert mem0["user_id"] == "minisweagent"
@@ -114,27 +118,30 @@ def test_add_receipts_become_create_changes(traced_backend, capture_server):
 
 
 def test_update_and_delete_receipts_map_to_their_actions(traced_backend, capture_server, fake_client):
+    _seed_memory(fake_client)  # m1 — the row the scripted UPDATE/DELETE acts on
     fake_client.add_event = "UPDATE"
     backend = traced_backend()
     backend.set_task("task")
     backend.record([{"role": "user", "content": "hello"}], step=1)
     backend._extract(2)
     (update,) = [c for c in _changes(capture_server) if c["action"] == "update"]
-    assert update["before"] == []  # no before-image
+    assert update["before"] == []  # the receipt payload carries no before-image
     assert update["after"][0]["item_id"] == "m1"
     (end,) = _ends(capture_server)
     assert end["extensions"]["mem0"]["updated"] == 1
+    assert end["state_evidence"] == "complete"  # the diff observed the same rewrite
 
     fake_client.add_event = "DELETE"
     backend.record([{"role": "user", "content": "again"}], step=3)
     backend._extract(4)
     (delete,) = [c for c in _changes(capture_server) if c["action"] == "delete"]
     assert delete["after"] == []
-    assert delete["before"][0]["item_id"] == "m2"
+    assert delete["before"][0]["item_id"] == "m1"
     assert delete["evidence"] == "native_receipt" and delete["completeness"] == "partial"
     (end,) = [e for e in _ends(capture_server) if e["operation_id"] == delete["operation_id"]]
     assert end["extensions"]["mem0"]["deleted"] == 1
     assert end["produced"] == []  # a delete produces nothing
+    assert end["state_evidence"] == "complete"
     backend.finalize()
 
 
@@ -197,6 +204,9 @@ def test_unrecognized_receipt_event_warns_but_succeeds(traced_backend, capture_s
 
 
 def test_failed_add_takes_the_exception_path(traced_backend, capture_server, fake_client):
+    """The add raises BEFORE anything persists: the observed before/after
+    diff is empty, so the end stays failed — but with both snapshots
+    available the evidence is now partial, not unknown."""
     backend = traced_backend()
     backend.set_task("task")
     backend.record([{"role": "user", "content": "hello"}], step=1)
@@ -204,9 +214,9 @@ def test_failed_add_takes_the_exception_path(traced_backend, capture_server, fak
     backend._extract(2)  # contained by the base shell
     assert _changes(capture_server) == []
     (end,) = _ends(capture_server)
-    assert end["status"] == "failed"  # no diff evidence on the hosted store
+    assert end["status"] == "failed"
     assert end["error_codes"] == ["Mem0ApiError"]
-    assert end["state_evidence"] == "unknown" and end["produced"] == []
+    assert end["state_evidence"] == "partial" and end["produced"] == []  # the diff saw no writes
     assert end["extensions"]["mem0"]["user_id"] == "minisweagent"
     assert "added" not in end["extensions"]["mem0"]  # no receipts on this path
     # The buffer survived for the next tick, which then traces normally.
@@ -214,6 +224,165 @@ def test_failed_add_takes_the_exception_path(traced_backend, capture_server, fak
     backend._extract(4)
     assert len(capture_server.events("memory_generate_start")) == 2
     assert _ends(capture_server)[1]["status"] == "completed"
+    backend.finalize()
+
+
+def test_persisted_timed_out_add_reconciles_via_the_state_diff(traced_backend, capture_server, fake_client):
+    """The campaign failure shape: the platform persists the extraction
+    server-side, then the answer dies on the wire. The observed diff must
+    attribute the landed rows — partial observed_diff changes under a
+    partial generation — instead of a failed end that denies them."""
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    storing_add = fake_client.add
+
+    def write_then_timeout(**kwargs):
+        storing_add(**kwargs)  # the write lands server-side...
+        raise httpx.RemoteProtocolError("Server disconnected")  # ...then the response dies
+
+    fake_client.add = write_then_timeout
+    backend._extract(2)  # contained by the base shell
+    (change,) = _changes(capture_server)
+    assert change["action"] == "create" and change["before"] == []
+    (ref,) = change["after"]
+    assert ref["item_id"] == "m1"
+    assert ref["version_id"] == f"m1:{text_sha256('fact: hello')}"
+    assert ref["identity_scheme"] == "mem0-platform-memory-v1"
+    assert ref["namespace"] == backend._namespace
+    assert change["evidence"] == "observed_diff"
+    assert change["completeness"] == "partial"
+    assert (change["change_index"], change["change_count"]) == (0, 1)
+    (end,) = _ends(capture_server)
+    assert end["status"] == "partial"
+    assert end["error_codes"] == ["RemoteProtocolError"]
+    assert end["change_count"] == 1 and end["state_evidence"] == "partial"
+    assert "added" not in end["extensions"]["mem0"]  # no receipts on this path
+    backend.finalize()
+
+
+def test_retried_add_after_a_persisted_timeout_never_double_reports(traced_backend, capture_server, fake_client):
+    """The buffer is retained across the failed add, so the next tick
+    re-sends the same messages and the engine dedupes them (NONE receipts).
+    The failed tick's diff already attributed the landed rows: the retry
+    must post NO further change for them and audit clean."""
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    storing_add = fake_client.add
+
+    def write_then_timeout(**kwargs):
+        storing_add(**kwargs)
+        raise Mem0ApiError(504, "poll timeout")
+
+    fake_client.add = write_then_timeout
+    backend._extract(2)
+    fake_client.add = storing_add
+    fake_client.add_event = "NONE"  # the retry's re-sent facts are deduped
+    backend._extract(4)
+    (change,) = _changes(capture_server)  # exactly the failed tick's recovered create
+    assert change["after"][0]["item_id"] == "m1"
+    ends = _ends(capture_server)
+    assert [e["status"] for e in ends] == ["partial", "completed"]
+    assert ends[1]["change_count"] == 0
+    assert ends[1]["state_evidence"] == "complete"  # NONE claims match the quiet diff
+    assert ends[1]["extensions"]["mem0"]["none"] == 1
+    backend.finalize()
+
+
+def test_snapshot_failure_degrades_to_unknown_evidence(traced_backend, capture_server, fake_client, monkeypatch):
+    """A snapshot that hits the same flaky endpoint degrades to the
+    pre-snapshot behavior: no diff evidence, unknown state, never a raise
+    into the native path."""
+    def failing_get_all(**kwargs):
+        raise Mem0ApiError(503, "get-all boom")
+
+    monkeypatch.setattr(fake_client, "get_all", failing_get_all)
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)  # clean native add; the audit is blind
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["change_count"] == 1  # receipts still trace
+    assert end["state_evidence"] == "unknown"
+    assert backend._counts["memories_added"] == 1
+    # Same degrade on the exception path: failed, unknown, no diff changes.
+    fake_client.add_error = Mem0ApiError(504, "poll timeout")
+    backend.record([{"role": "user", "content": "again"}], step=3)
+    backend._extract(4)
+    ends = _ends(capture_server)
+    assert ends[1]["status"] == "failed" and ends[1]["state_evidence"] == "unknown"
+    assert len(_changes(capture_server)) == 1  # only the first tick's receipt change
+    assert backend._counts["extraction_errors"] == 1
+    backend.finalize()
+
+
+def test_receipts_the_state_does_not_show_are_flagged_drift(traced_backend, capture_server, fake_client, monkeypatch):
+    """The silent-insert class (documented for the OSS surfaces: ADD
+    receipts over an empty write): a completed generation whose receipts
+    the observed diff cannot confirm ends partial, not complete."""
+    monkeypatch.setattr(
+        fake_client,
+        "add",
+        lambda **kwargs: [{"id": "m9", "memory": "ghost receipt", "event": "ADD"}],  # claims, persists nothing
+    )
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)
+    (change,) = _changes(capture_server)
+    assert change["evidence"] == "native_receipt" and change["completeness"] == "partial"
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["change_count"] == 1
+    assert end["state_evidence"] == "partial"  # the claim has no state behind it
+    assert end["extensions"]["mem0"]["unexplained"] == ["receipt create on m9 is not reflected in the after snapshot"]
+    backend.finalize()
+
+
+def test_state_changes_without_receipts_are_flagged_drift(traced_backend, capture_server, fake_client, monkeypatch):
+    """The reverse direction: the store mutated but the engine reported no
+    receipts, so no change can be cited — the generation posts none and the
+    observed diff downgrades the end's evidence to partial."""
+    storing_add = fake_client.add
+
+    def silent_persist(**kwargs):
+        storing_add(**kwargs)
+        return []
+
+    monkeypatch.setattr(fake_client, "add", silent_persist)
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)
+    assert _changes(capture_server) == []
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["change_count"] == 0
+    assert end["state_evidence"] == "partial"
+    assert end["extensions"]["mem0"]["unexplained"] == ["observed create on m1 with no matching receipt"]
+    backend.finalize()
+
+
+def test_batched_receipts_for_one_row_do_not_false_flag(traced_backend, capture_server, fake_client, monkeypatch):
+    """One add can report several receipts for the same row (created, then
+    rewritten within the batch). The audit keys claims per id with all its
+    actions: the observed create matches the ADD claim, and the row's
+    presence confirms the UPDATE — no drift."""
+    storing_add = fake_client.add
+
+    def create_then_rewrite(**kwargs):
+        receipts = storing_add(**kwargs)
+        return receipts + [{"id": receipts[0]["id"], "memory": receipts[0]["memory"], "event": "UPDATE"}]
+
+    monkeypatch.setattr(fake_client, "add", create_then_rewrite)
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)
+    assert [c["action"] for c in _changes(capture_server)] == ["create", "update"]
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["change_count"] == 2
+    assert end["state_evidence"] == "complete"
+    assert "unexplained" not in end["extensions"]["mem0"]
     backend.finalize()
 
 

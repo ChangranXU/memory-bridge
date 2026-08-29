@@ -15,13 +15,17 @@ in any mode — the memory lane stays a zero-model-call annotate namespace.
 
 When the benchmark model runs through a trajectory-proxy, the shared base
 annotates the run's memory protocol (schema v6): one trace session per
-episode, extraction adds as generation operations whose changes are the
-engine's own ADD/UPDATE/DELETE receipts (``native_receipt`` evidence), and
-recalls as search + main delivery. The memory lane carries no model traffic,
-so its annotate endpoint comes from the explicit
-``MEMORY_ANNOTATE_MEMORY_URL`` env / ``annotate_memory_url`` config. Tracing
-is pure observability: every annotation failure degrades to untraced native
-work, never to a behavior change.
+episode, extraction adds as generation operations, and recalls as search +
+main delivery. A generation's changes are the engine's own ADD/UPDATE/DELETE
+receipts (``native_receipt`` evidence), cross-checked against a before/after
+snapshot of the store's user scope; on the exception path (no receipts) the
+observed snapshot diff is the only evidence, so a timed-out add the platform
+persisted anyway still surfaces as ``observed_diff`` changes under a
+``partial`` generation. The memory lane carries no model traffic, so its
+annotate endpoint comes from the explicit ``MEMORY_ANNOTATE_MEMORY_URL`` env
+/ ``annotate_memory_url`` config. Tracing is pure observability: every
+annotation failure degrades to untraced native work, never to a behavior
+change.
 
 Scoping: run isolation comes from the effective user id in every mode
 (platform's store is hosted and persistent across run roots; server/library
@@ -47,8 +51,9 @@ from mem0_bridge.stores import Mem0Store, open_store
 logger = logging.getLogger("mem0_bridge.backend")
 
 _SUPPORTED_ROLES = frozenset({"user", "assistant", "system"})
-# The final memory dump is diagnostic: the store walks up to this ceiling
-# (the OSS server clamps at its own hard 1000-row cap — see stores/).
+# The user-scope listing ceiling, shared by the final dump and the generation
+# audit snapshot (the OSS server clamps at its own hard 1000-row cap — see
+# stores/).
 _FINAL_DUMP_LIMIT = 10000
 _ADAPTER_NAME = "mem0"
 
@@ -269,19 +274,49 @@ class Mem0Backend(BaseMemoryBackend):
             "extensions": {_ADAPTER_NAME: extensions},
         }
 
-    def _attribute_changes(self, operation, result, after):
-        """Engine receipts -> the change series (evidence: native_receipt).
+    def _snapshot_memory_state(self) -> dict | None:
+        """The store's full user scope as the generation audit's observed
+        state, or None when the listing fails (the base then reports
+        ``unknown`` evidence — a snapshot never raises into the native path).
 
-        No mode offers a before-image (no extra get_all per flush —
-        a recorded fidelity limit), so every change is completeness=partial.
-        NONE receipts emit no change — a zero-change generation is legal
-        (change_count: 0). ``result`` is None on the exception path: a failed
-        add returns no receipts.
+        No mode's get-all filters server-side by anything but ``user_id``,
+        so the snapshot walks the whole retrieval scope — the same walk and
+        the same ceiling as ``_final_dump``. That costs two listings per
+        traced extraction tick (on the platform a paginated walk each) and
+        buys the only evidence the exception path can have: a timed-out add
+        the platform persisted anyway shows up as a before/after diff, and
+        the success path can cross-check its receipts against the observed
+        state. Untraced runs never pay it — the base snapshots only around
+        a live trace operation. Id-less rows are uncitable (the
+        ``_memory_ref`` rule) and stay out of the diff.
+        """
+        store = self._store
+        if store is None:
+            return None
+        try:
+            rows = store.get_all(user_id=self.effective_user_id(), limit=_FINAL_DUMP_LIMIT)
+        except Exception:
+            logger.warning("memory audit snapshot failed", exc_info=True)
+            return None
+        return {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id")}
+
+    def _attribute_changes(self, operation, result, after):
+        """Engine receipts -> the change series (evidence: native_receipt),
+        audited against the observed before/after diff when both snapshots
+        exist.
+
+        Receipt changes stay completeness=partial: the payload carries no
+        before-image. NONE receipts emit no change — a zero-change
+        generation is legal (change_count: 0). ``result`` is None on the
+        exception path (a failed add returns no receipts): the base's
+        generic observed diff of the two snapshots is then the only
+        evidence, and the base posts it with completeness=partial.
         """
         if result is None:
-            return [], [], []
+            return super()._attribute_changes(operation, result, after)
         changes: list[dict] = []
         produced: list[dict] = []
+        claimed: dict[str, set[str]] = {}  # id -> receipt actions (one row can earn several in a batch)
         for item in result:
             if not item.get("id"):
                 # A receipt without a platform id can never be cited or
@@ -297,6 +332,7 @@ class Mem0Backend(BaseMemoryBackend):
                     )
                 )
                 produced.append(self._memory_ref(item))
+                claimed.setdefault(str(item["id"]), set()).add("create")
             elif event == "UPDATE":
                 changes.append(
                     self._change_payload(
@@ -305,6 +341,7 @@ class Mem0Backend(BaseMemoryBackend):
                     )
                 )
                 produced.append(self._memory_ref(item))
+                claimed.setdefault(str(item["id"]), set()).add("update")
             elif event == "DELETE":
                 changes.append(
                     self._change_payload(
@@ -312,13 +349,42 @@ class Mem0Backend(BaseMemoryBackend):
                         evidence="native_receipt", extensions=extensions, completeness="partial",
                     )
                 )
+                claimed.setdefault(str(item["id"]), set()).add("delete")
             # NONE: the platform deduped/ignored the fact — no change.
-        return changes, produced, []
+        return changes, produced, self._audit_against_state(operation, claimed, after)
+
+    def _audit_against_state(self, operation, claimed: dict[str, set[str]], after: dict | None) -> list[str]:
+        """Cross-check the receipt claims against the observed state diff.
+
+        Claim direction: a row with an ADD/UPDATE claim must exist in the
+        after snapshot, a DELETE claim must not (the silent-insert class —
+        receipts over an empty write — surfaces here). Observed direction:
+        every diff change needs its receipt. Either mismatch is one
+        unexplained-drift line; with no before snapshot there is no diff to
+        audit against and the base reports ``unknown`` evidence instead.
+        """
+        if operation.before is None or after is None:
+            return []
+        observed, _, _ = super()._attribute_changes(operation, None, after)
+        unexplained = []
+        for change in observed:
+            refs = change["after"] or change["before"]
+            item_id = refs[0]["item_id"]
+            if change["action"] not in claimed.get(item_id, set()):
+                unexplained.append(f"observed {change['action']} on {item_id} with no matching receipt")
+        for item_id, actions in claimed.items():
+            present = item_id in after
+            if ("delete" in actions and present) or (actions != {"delete"} and not present):
+                unexplained.append(f"receipt {'+'.join(sorted(actions))} on {item_id} is not reflected in the after snapshot")
+        return unexplained
 
     def _generation_end_context(self, step, result, audit: dict) -> dict:
         """extensions.mem0 for the generation end: the engine event counts
-        (absent on the exception path, which has no receipts)."""
+        (absent on the exception path, which has no receipts) plus the
+        receipt-vs-state audit's drift lines when any."""
         context = {"session_id": self._session_id, "extraction_step": str(step), "user_id": self.effective_user_id()}
+        if audit.get("unexplained"):
+            context["unexplained"] = audit["unexplained"]
         if result is not None:
             counts = {"ADD": 0, "UPDATE": 0, "DELETE": 0, "NONE": 0}
             for item in result:

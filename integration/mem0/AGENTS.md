@@ -156,6 +156,19 @@ Platform surface (verified against the v3 API reference + recorded runs):
   client's UPDATE/DELETE receipt branches stay for the other surfaces it
   serves.
 
+Generation audit (all modes, traced runs only): the backend snapshots the
+store's full user scope (`get_all`, the final dump's ceiling) before and
+after every extraction tick. A completed generation's receipts are
+cross-checked against the observed before/after diff (a disagreement — the
+silent-insert class, or a mutation no receipt claims — downgrades the end's
+`state_evidence` to `partial` with the drift lines in the audit), and a
+failed add that persisted server-side anyway is reconciled from the diff as
+partial `observed_diff` changes under a `partial` generation end, instead of
+the change-less `failed`/`unknown` that used to deny the landed rows. The
+snapshot costs two user-scope listings per traced tick (platform: one
+paginated walk each) and degrades to `unknown` evidence on any listing
+error — never a raise into the native path.
+
 OSS surfaces (server mode over HTTP, library mode in-process — wire claims
 verified against the vendored tree, pin in `VENDORING.md`):
 

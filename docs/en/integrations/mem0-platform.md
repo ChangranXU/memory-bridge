@@ -14,6 +14,8 @@ The mem0 integration (`integration/mem0/`) runs [mem0](https://mem0.ai) in one o
 
 Extraction traffic is never recorded in the trajectory in any mode — the MEMORY proxy lane stays a zero-model-call annotation namespace.
 
+The host-side `recall_min_score` floor (the shipped yaml's `0.1`) is calibrated on the platform's combined 0–1 score. The OSS hybrid score is a different scale and scores are never compared across modes, so the driver passes `agent.memory.recall_min_score=null` for server/library arms — the floor stays platform-only until a calibration pair picks per-mode values.
+
 ## Architecture
 
 ```mermaid

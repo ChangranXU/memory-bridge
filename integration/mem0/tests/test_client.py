@@ -167,6 +167,22 @@ def test_search_always_sends_threshold_explicitly():
     assert body_of(requests[0])["threshold"] == 0.0
 
 
+def test_search_fails_closed_on_a_shapeless_200():
+    """A 200 that is not the results envelope is drift, not "no memories":
+    coercing it to [] would let the recall path cache a fabricated empty
+    answer as authoritative (silent blindness, no counter moving)."""
+    client, _ = make_client(lambda r: httpx.Response(200, json={"message": "ok"}))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        client.search(query="q", user_id="alice", top_k=3)
+    assert excinfo.value.status_code == 502
+    assert "message" in excinfo.value.reason  # the drifted body's keys, never its content
+
+    client, _ = make_client(lambda r: httpx.Response(200, content=b"null"))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        client.search(query="q", user_id="alice", top_k=3)
+    assert excinfo.value.status_code == 502
+
+
 def test_get_all_posts_filters_with_pagination_params():
     client, requests = make_client(lambda r: httpx.Response(200, json={"count": 0, "results": []}))
     client.get_all(user_id="alice", page_size=50)

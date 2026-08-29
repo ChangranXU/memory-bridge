@@ -14,6 +14,8 @@ mem0 集成（`integration/mem0/`）以三种部署模式之一运行 [mem0](htt
 
 任何模式下提取流量都不记录进轨迹——MEMORY 代理 lane 始终是零模型调用的标注命名空间。
 
+主机侧的 `recall_min_score` 下限（随附 yaml 的 `0.1`）是按 platform 的组合 0–1 分数校准的。OSS 混合分数是另一套尺度，分数从不跨模式比较，因此驱动器对 server/library 臂传入 `agent.memory.recall_min_score=null`——该校准对为各模式选定取值之前，下限仅对 platform 生效。
+
 ## 架构
 
 ```mermaid

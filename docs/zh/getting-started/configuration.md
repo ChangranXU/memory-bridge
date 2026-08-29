@@ -94,6 +94,7 @@ API=openai-chat
 | `EMBEDDING_BASE_URL` | embedding 端点（四元组的一部分——见 `EMBEDDING_MODEL`）。 |
 | `EMBEDDING_DIMENSIONS` | embedding 维度（四元组的一部分——见 `EMBEDDING_MODEL`）。 |
 | `MEM0_API_KEY` | mem0 Platform API key（bundle 根目录 `.env`；仅 platform 模式） |
+| `RERANKER_*` | 为未来的 mem0 OSS 检索重排（reranker）通道预留（[mem0 reranker 文档](https://docs.mem0.ai/open-source/features/reranker-search)）；当前没有任何 arm 读取这些键。 |
 
 {% hint style="warning" %}
 凭据保存在 pydantic 字段中，标记为 `exclude=True, repr=False`。只有脱敏后的 URL 才会出现在产物和日志中——用户信息、查询字符串和片段被移除，轨迹 ID 被替换为其 16 个十六进制字符的 SHA-256 哈希前缀。

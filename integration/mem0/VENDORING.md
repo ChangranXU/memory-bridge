@@ -37,7 +37,10 @@ The clone pins the ROUTES, not the engine that runs: `server/requirements.txt`
 carries `mem0ai>=0.1.48` (an unpinned lower bound), so a naive build floats
 with PyPI latest. The driver rewrites that line to `mem0ai==2.0.19` in a
 patched build-context copy at build time (the clone itself stays pristine) and
-tags the image `mem0-oss-server:2.0.19`. Both pins are recorded together in
+tags the image `mem0-oss-server:2.0.19-<routes-pin>` (the clone's HEAD short
+hash): the tag keys on BOTH pins, so a ROUTES re-pin invalidates it and
+`build_mem0_server_image`'s `docker image inspect` short-circuit rebuilds
+instead of silently reusing a stale image. Both pins are recorded together in
 the run root's `memory-arm.log`. The same staging step switches
 `psycopg>=3.2.8` to `psycopg[binary]>=3.2.8`: the Dockerfile's
 `python:3.12-slim` base ships no libpq, so the pure wheel dies at the first

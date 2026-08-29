@@ -61,6 +61,34 @@ def _results_of(container: dict) -> list[dict]:
     return [_normalize_result(item) for item in results if isinstance(item, dict)]
 
 
+def _shape_of(body) -> str:
+    """A safe description of an unexpected response body for error reasons:
+    a dict's sorted key names, anything else's type name — never the content
+    itself (a drifted add body may carry user messages)."""
+    return f"keys {sorted(body)}" if isinstance(body, dict) else type(body).__name__
+
+
+def _request_json(client: httpx.Client, method: str, path: str, *, json=None, params=None, timeout: float | None = None):
+    """One mem0 REST call's shared plumbing (the platform client and the OSS
+    server store): issue the request, decode the body as JSON (None when
+    absent or not JSON), and map an error status to Mem0ApiError.
+
+    A per-call timeout overrides the client-wide default (httpx semantics —
+    an explicit None would DISABLE the timeout, so it is never forwarded):
+    the recall search uses it to bound one call by the configured
+    search_timeout while everything else keeps the client-wide budget.
+    """
+    override = {} if timeout is None else {"timeout": timeout}
+    response = client.request(method, path, json=json, params=params, **override)
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if response.status_code >= 400:
+        raise Mem0ApiError(response.status_code, _error_reason(body, response.status_code))
+    return body
+
+
 class Mem0PlatformClient:
     """Synchronous mem0 Platform client; one httpx connection pool."""
 
@@ -83,18 +111,9 @@ class Mem0PlatformClient:
     # Plumbing
     # ------------------------------------------------------------------
     def _request(self, method: str, path: str, *, json=None, params=None, timeout: float | None = None) -> dict:
-        # A per-call timeout overrides the client-wide default (httpx semantics —
-        # an explicit None would DISABLE the timeout, so it is never forwarded):
-        # the recall search uses it to bound one hosted call by the configured
-        # search_timeout while everything else keeps the client-wide budget.
-        override = {} if timeout is None else {"timeout": timeout}
-        response = self._client.request(method, path, json=json, params=params, **override)
-        try:
-            body = response.json()
-        except ValueError:
-            body = None
-        if response.status_code >= 400:
-            raise Mem0ApiError(response.status_code, _error_reason(body, response.status_code))
+        # The platform surface only ever consumes dict bodies; a non-dict
+        # decode (e.g. an empty 200) coerces to {}.
+        body = _request_json(self._client, method, path, json=json, params=params, timeout=timeout)
         return body if isinstance(body, dict) else {}
 
     def close(self) -> None:
@@ -186,11 +205,15 @@ class Mem0PlatformClient:
         the caller (the shared host-side floor), never to an implicit default.
         """
         body: dict = {"query": query, "filters": {"user_id": user_id}, "top_k": top_k, "threshold": threshold}
-        response = self._request("POST", "/v3/memories/search/", json=body, timeout=timeout)
-        results = response.get("results")
-        if not isinstance(results, list):
-            return []
-        return [item for item in results if isinstance(item, dict)]
+        # The raw body, not _request's dict coercion: a shapeless 200 is
+        # drift, not "no memories" — fail closed like a drifted add (the
+        # recall path caches an empty answer as authoritative, so a drifted
+        # envelope would blind recall until the next dirty tick with no
+        # counter moving).
+        response = _request_json(self._client, "POST", "/v3/memories/search/", json=body, timeout=timeout)
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise Mem0ApiError(502, f"mem0 platform search returned an unrecognizable response: {_shape_of(response)}")
+        return [item for item in response["results"] if isinstance(item, dict)]
 
     def get_all(self, *, user_id: str, page_size: int = 100, page: int = 1) -> dict:
         """One page of the v3 get-all envelope. Pagination is the caller's

@@ -10,6 +10,15 @@ SDK) is only ever imported in library mode.
 Shared conventions every implementation honors:
 
 - Writes are synchronous: ``add`` returns only after persistence.
+- ``add`` fails CLOSED on a drifted success body (a 200 that is not the
+  mode's ``results`` receipt list raises 502, never coerces to "stored
+  nothing"): the backend clears its retained batch on any non-raising add,
+  so a silent empty would lose messages. An empty list stays a legitimate
+  no-op extraction.
+- ``search`` fails closed the same way (a success body without the
+  ``results`` list raises 502, never returns an empty answer): the recall
+  path caches an empty search as authoritative until the next dirty tick,
+  so a drifted envelope would silently blind recall with no counter moving.
 - ``user_id`` is the sole retrieval-isolation boundary (the bridge passes
   ``user_id`` only, never ``agent_id`` — the platform's attribution splitting
   would stamp assistant-message facts with ``agent_id`` instead, and a
@@ -22,9 +31,14 @@ Shared conventions every implementation honors:
   hit — so the endpoint contract's 404 rule holds on every surface (the OSS
   server's ``GET /memories/{id}`` answers 200 ``null`` for unknown ids; the
   server store maps it).
-- ``get_all`` paginates to exhaustion behind the store (the platform's
-  envelope pages at 100; the OSS surfaces default ``top_k`` to 20) and
-  returns flat native rows.
+- ``get_all`` fails closed on a drifted envelope the same way (the dump a
+  coerced ``[]`` would silently truncate is diagnostic, so the error surfaces
+  through the base's finalize containment as a counted backend error). It
+  returns flat native rows up to ``limit``: the platform paginates its
+  envelope to exhaustion behind the store, the library engine takes the limit
+  as ``top_k`` directly, and the OSS server has NO pagination — it answers
+  one clamped page (hard server-side cap of 1000), so a run root past 1000
+  memories truncates the final dump there.
 """
 
 from typing import Protocol, TypedDict
@@ -79,8 +93,9 @@ class Mem0Store(Protocol):
         ...
 
     def get_all(self, *, user_id: str, limit: int) -> list[dict]:
-        """Every row under ``user_id`` (capped at ``limit``), paginated to
-        exhaustion behind the store."""
+        """Every row under ``user_id`` (capped at ``limit``); the platform
+        paginates to exhaustion behind the store, the OSS server answers one
+        clamped page (hard cap 1000). Fails closed on a drifted envelope."""
         ...
 
     def update(self, memory_id: str, *, text: str | None = None, metadata: dict | None = None) -> dict: ...

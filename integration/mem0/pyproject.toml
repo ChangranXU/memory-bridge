@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mem0-bridge"
 version = "0.1.0"
-description = "mem0 Platform integration for the shared memory bridge: hosted-memory backend/agent glue and its standardized-endpoint adapter."
+description = "mem0 integration for the shared memory bridge: platform/server/library-mode backend/agent glue and its standardized-endpoint adapter."
 requires-python = ">=3.10"
 dependencies = ["shared-bridge", "httpx"]
 

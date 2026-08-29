@@ -10,16 +10,17 @@ server-side at 1000); the readiness probe is ``GET /auth/setup-status`` (the
 API server has no ``/health`` — that path is the dashboard's).
 
 Auth: the arm runs the container with ``AUTH_DISABLED=true``, so NO auth
-header is sent when ``server_api_key`` is empty — a presented credential would
-reach the JWT path and 500 without a configured ``JWT_SECRET``
-(``server/auth.py``). Missing-id mapping: ``GET /memories/{id}`` answers 200
+header is sent when ``server_api_key`` is empty. A presented credential still
+fails loudly (``server/auth.py:verify_auth``): the store's ``X-API-Key`` goes
+down the DB api-key path and 401s; only a Bearer token would reach the JWT
+path and 500 without a configured ``JWT_SECRET``. Missing-id mapping: ``GET /memories/{id}`` answers 200
 ``null`` for unknown ids (PUT/DELETE already 404 via the server's ValueError
 handler) — this store maps the null to the protocol's 404 convention.
 """
 
 import httpx
 
-from mem0_bridge.client import Mem0ApiError, _error_reason, _results_of
+from mem0_bridge.client import Mem0ApiError, _request_json, _results_of, _shape_of
 from mem0_bridge.stores import Receipt
 
 # The server clamps get-all top_k at ALL_MEMORIES_LIMIT (server/main.py).
@@ -52,17 +53,9 @@ class ServerStore:
         )
 
     def _request(self, method: str, path: str, *, json=None, params=None, timeout: float | None = None):
-        # Same per-call-timeout semantics as the platform client: an explicit
-        # None would DISABLE the httpx timeout, so it is never forwarded.
-        override = {} if timeout is None else {"timeout": timeout}
-        response = self._client.request(method, path, json=json, params=params, **override)
-        try:
-            body = response.json()
-        except ValueError:
-            body = None
-        if response.status_code >= 400:
-            raise Mem0ApiError(response.status_code, _error_reason(body, response.status_code))
-        return body
+        # The raw body passes through untouched: GET /memories/{id} answering
+        # 200 null for an unknown id depends on the None surviving.
+        return _request_json(self._client, method, path, json=json, params=params, timeout=timeout)
 
     def close(self) -> None:
         self._client.close()
@@ -94,7 +87,13 @@ class ServerStore:
         if guidelines and guidelines.strip():
             body["prompt"] = guidelines.strip()
         response = self._request("POST", "/memories", json=body, timeout=self._add_timeout)
-        return _results_of(response if isinstance(response, dict) else {})
+        # Fail closed on a shapeless 200: coercing one to [] would report
+        # "success, zero memories" and the backend would clear the retained
+        # batch — silent message loss (the platform client raises for the
+        # same drift; an empty results LIST stays a legitimate no-op add).
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise Mem0ApiError(502, f"mem0 server add returned an unrecognizable response: {_shape_of(response)}")
+        return _results_of(response)
 
     def search(
         self,
@@ -107,10 +106,12 @@ class ServerStore:
     ) -> list[dict]:
         body: dict = {"query": query, "filters": {"user_id": user_id}, "top_k": top_k, "threshold": threshold}
         response = self._request("POST", "/search", json=body, timeout=timeout)
-        results = response.get("results") if isinstance(response, dict) else None
-        if not isinstance(results, list):
-            return []
-        return [item for item in results if isinstance(item, dict)]
+        # Fail closed on a shapeless 200, same as add: coercing drift to []
+        # reads as "no memories", and the recall path CACHES an empty answer
+        # as authoritative — silent blindness until the next dirty tick.
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise Mem0ApiError(502, f"mem0 server search returned an unrecognizable response: {_shape_of(response)}")
+        return [item for item in response["results"] if isinstance(item, dict)]
 
     def get(self, memory_id: str) -> dict:
         body = self._request("GET", f"/memories/{memory_id}")
@@ -128,7 +129,9 @@ class ServerStore:
         )
         results = response.get("results") if isinstance(response, dict) else None
         if not isinstance(results, list):
-            return []
+            # Fail closed like add/search: a drifted envelope coerced to []
+            # would silently truncate the final dump with no counter moving.
+            raise Mem0ApiError(502, f"mem0 server get-all returned an unrecognizable response: {_shape_of(response)}")
         return [item for item in results if isinstance(item, dict)][:limit]
 
     def update(self, memory_id: str, *, text: str | None = None, metadata: dict | None = None) -> dict:

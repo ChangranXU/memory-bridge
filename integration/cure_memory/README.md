@@ -114,7 +114,7 @@ arm. Keep `EXTRACT_API_KEY` in the environment, never on the command line.
 Shared fields (`enabled`, `scope`, `user_id`, `output_dir`, `strict`,
 `max_message_chars`, `inject_recall`, `max_memories`, `max_total_recall_chars`,
 `max_chars_per_memory`, `annotate`, `annotate_*`) are documented in
-[Memory lifecycle](../../doc/memory-lifecycle.md). CURE-specific fields:
+[Memory lifecycle](../../docs/en/concepts/memory-lifecycle.md). CURE-specific fields:
 
 | Key | Default | Description |
 |---|---|---|
@@ -149,7 +149,7 @@ With `annotate=true` (default) and both lanes on the roster proxy, the backend
 annotates `trajectory.jsonl` with schema-v6 `memory_*` events: session/role
 binds, generation operations with change audits, search operations, and
 delivery proofs. Full protocol details:
-[Memory tracing protocol](../../doc/tracing.md).
+[Memory tracing protocol](../../docs/en/concepts/tracing-protocol.md).
 
 ## Troubleshooting
 

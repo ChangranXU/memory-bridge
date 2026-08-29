@@ -54,11 +54,12 @@ require_instance_ids
 
 # Stale embedding-lane exports must not leak into the tencentdb arm's
 # all-or-none check below (the .env is the single source) — unset before the
-# roster .env is sourced. The MEM0_* names get the same treatment: the root
-# .env is their sole source too (a stale MEM0_SERVER_URL from a dead
-# server-mode arm must never reach a platform run).
+# roster .env is sourced. The MEM0_* connection names get the same treatment
+# (a stale MEM0_SERVER_URL from a dead server-mode arm must never reach a
+# platform run). MEM0_API_KEY stays honored from the environment (rule 8:
+# the environment OR the root .env); when both set it, the sourced .env wins.
 unset EMBEDDING_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL EMBEDDING_DIMENSIONS
-unset MEM0_API_KEY MEM0_BASE_URL MEM0_SERVER_URL MEM0_SERVER_API_KEY MEM0_TELEMETRY
+unset MEM0_BASE_URL MEM0_SERVER_URL MEM0_SERVER_API_KEY MEM0_TELEMETRY
 
 # load_model_env sources the roster .env, maps API_KEY/BASE_URL -> OPENAI_*,
 # and sets MODEL_NAME (MSWEA_MODEL_NAME wins; else openai/$MODEL unless $MODEL
@@ -454,15 +455,29 @@ start_tdai_container() {
 # server arms cannot run concurrently on one machine — enforced at the process
 # level by the machine-wide claim taken in the profile (same discipline as the
 # tencentdb arm's 8420 claim; see that block for the full claim rationale).
-MEM0_SERVER_IMAGE="mem0-oss-server:2.0.19"
+# The image tag is assigned in build_mem0_server_image (it embeds the clone's
+# routes pin, read where the clone is validated — platform/library modes never
+# reference it). The engine pin lives in exactly ONE place: the tag, the
+# requirements rewrite, and its verify check all expand MEM0_ENGINE_PIN — a
+# bump can never mislabel an image with the old pin (which the
+# `docker image inspect` short-circuit would then keep reusing).
 MEM0_SERVER_PORT=8890
+MEM0_ENGINE_PIN=2.0.19
 
 build_mem0_server_image() {
+  local clone="$INTEGRATION/vendor/mem0"
+  [ -f "$clone/server/Dockerfile" ] || die "missing the vendored mem0 clone at $clone (server mode builds from it — see integration/mem0/VENDORING.md)"
+  # The tag keys on BOTH pins — the engine pin (the requirements rewrite below)
+  # and the clone's HEAD (the routes): the short-circuit on `docker image
+  # inspect` must rebuild, never silently reuse a stale image, when either pin
+  # moves.
+  local routes_pin
+  routes_pin="$(git -C "$clone" rev-parse --short HEAD)" \
+    || die "cannot read the routes pin of the vendored clone at $clone (git rev-parse failed)"
+  MEM0_SERVER_IMAGE="mem0-oss-server:${MEM0_ENGINE_PIN}-${routes_pin}"
   if docker image inspect "$MEM0_SERVER_IMAGE" >/dev/null 2>&1; then
     return 0
   fi
-  local clone="$INTEGRATION/vendor/mem0"
-  [ -f "$clone/server/Dockerfile" ] || die "missing the vendored mem0 clone at $clone (server mode builds from it — see integration/mem0/VENDORING.md)"
   # The clone pins the ROUTES; the ENGINE is pinned here: requirements.txt
   # carries an unpinned lower bound (mem0ai>=0.1.48), so a naive build floats
   # with PyPI latest. Rewrite it in a staged copy — the clone stays pristine.
@@ -473,10 +488,10 @@ build_mem0_server_image() {
   local ctx="$MEM0_SERVER_ROOT/build-context"
   rm -rf "$ctx"
   cp -R "$clone/server" "$ctx"
-  sed -i.bak -e 's/^mem0ai>=.*$/mem0ai==2.0.19/' -e 's/^psycopg>=/psycopg[binary]>=/' "$ctx/requirements.txt" && rm -f "$ctx/requirements.txt.bak"
-  grep -q '^mem0ai==2.0.19$' "$ctx/requirements.txt" || die "failed to pin mem0ai==2.0.19 in the staged build context"
+  sed -i.bak -e "s/^mem0ai>=.*\$/mem0ai==${MEM0_ENGINE_PIN}/" -e 's/^psycopg>=/psycopg[binary]>=/' "$ctx/requirements.txt" && rm -f "$ctx/requirements.txt.bak"
+  grep -q "^mem0ai==${MEM0_ENGINE_PIN}\$" "$ctx/requirements.txt" || die "failed to pin mem0ai==${MEM0_ENGINE_PIN} in the staged build context"
   grep -q '^psycopg\[binary\]>=' "$ctx/requirements.txt" || die "failed to switch psycopg to the binary variant in the staged build context"
-  log "building $MEM0_SERVER_IMAGE from the vendored tree (routes fdfb763, engine mem0ai==2.0.19; first build needs network)"
+  log "building $MEM0_SERVER_IMAGE from the vendored tree (routes $routes_pin, engine mem0ai==${MEM0_ENGINE_PIN}; first build needs network)"
   docker build -q -t "$MEM0_SERVER_IMAGE" "$ctx" >/dev/null || die "failed to build $MEM0_SERVER_IMAGE"
   rm -rf "$ctx"
 }
@@ -489,7 +504,9 @@ start_mem0_server_stack() {
   # and a leaked stack keeps 127.0.0.1:8890 bound. Safe for the same reason as
   # the tdai-* sweep: the machine-wide claim was taken before this point.
   docker ps -aq --filter "name=^/mem0-server-" | xargs docker rm -f >/dev/null 2>&1 || true
-  docker network ls -q --filter "name=^mem0-server-net-" | xargs docker network rm >/dev/null 2>&1 || true
+  # Network names are mem0-server-<run-root-basename>-net: the anchor is the
+  # same mem0-server- prefix as the containers (networks carry no leading /).
+  docker network ls -q --filter "name=^mem0-server-" | xargs docker network rm >/dev/null 2>&1 || true
 
   MEM0_SERVER_ROOT="$RUN_ROOT/mem0-server"
   # Mounted AT /app/history: the server's SQLiteManager does a bare
@@ -540,13 +557,27 @@ start_mem0_server_stack() {
   # default (1536) and every insert would then fail with "expected 1536
   # dimensions" — SILENTLY (the add still returns ADD receipts; only the
   # container log shows the DataException). _ensure_collection skips an
-  # existing table, so this precreate is authoritative. The DDL mirrors the
-  # engine's own create_col (mem0/vector_stores/pgvector.py); the vector store
-  # connects to the default `postgres` database.
-  docker exec "$MEM0_PG_CONTAINER" psql -U mem0 -d postgres -v ON_ERROR_STOP=1 \
-    -c "CREATE EXTENSION IF NOT EXISTS vector" \
-    -c "CREATE TABLE IF NOT EXISTS memories (id UUID PRIMARY KEY, vector vector(${EMBEDDING_DIMENSIONS}), payload JSONB)" \
-    >/dev/null || die "failed to precreate the mem0 memories table at ${EMBEDDING_DIMENSIONS} dims"
+  # existing table, so this precreate is authoritative. The table DDL mirrors
+  # the engine's own create_col (mem0/vector_stores/pgvector.py), minus its
+  # HNSW and GIN indexes — dead weight at run-root scale; the vector store
+  # connects to the default `postgres` database. The retry absorbs the stock
+  # entrypoint's initdb restart gap: on a fresh volume pg_isready passes
+  # against the temporary init server, which then stops before the real
+  # postmaster starts.
+  local attempt
+  for attempt in $(seq 1 10); do
+    if docker exec "$MEM0_PG_CONTAINER" psql -U mem0 -d postgres -v ON_ERROR_STOP=1 \
+      -c "CREATE EXTENSION IF NOT EXISTS vector" \
+      -c "CREATE TABLE IF NOT EXISTS memories (id UUID PRIMARY KEY, vector vector(${EMBEDDING_DIMENSIONS}), payload JSONB)" \
+      >/dev/null 2>&1; then
+      break
+    fi
+    if [ "$attempt" = 10 ]; then
+      docker logs --tail 30 "$MEM0_PG_CONTAINER" >&2 || true
+      die "failed to precreate the mem0 memories table at ${EMBEDDING_DIMENSIONS} dims (pg logs above)"
+    fi
+    sleep 1
+  done
 
   # The full boot env, covering the server's three import-time fatals: LLM
   # creds (roster, /v1-normalized — honored at boot by BOTH the LLM and the
@@ -644,9 +675,10 @@ case "$INTEGRATION_NAME" in
     case "$MEM0_MODE" in
       platform)
         # The hosted store is persistent across run roots: run isolation comes
-        # from the per-run user id minted above. MEM0_API_KEY rides the root
-        # .env (load_model_env already exported it).
-        : "${MEM0_API_KEY:?MEM0_API_KEY must be set in $ENV_FILE (mem0 platform mode)}"
+        # from the per-run user id minted above. MEM0_API_KEY rides the
+        # environment or the root .env (rule 8; load_model_env already
+        # exported the .env copy when present).
+        : "${MEM0_API_KEY:?MEM0_API_KEY must be set in the environment or $ENV_FILE (mem0 platform mode)}"
         ;;
       server)
         require_mem0_embedding_quartet
@@ -657,11 +689,26 @@ case "$INTEGRATION_NAME" in
         # TMPDIR). Claimed before the recorder .env is regenerated too.
         MEM0_ARM_CLAIM="${TMPDIR:-/tmp}/mem0-arm-claim"
         MEM0_CLAIM_WAITS=0
+        MEM0_CLAIM_VANISHED=0
         while ! mkdir "$MEM0_ARM_CLAIM" 2>/dev/null; do
+          if [ ! -e "$MEM0_ARM_CLAIM" ]; then
+            # The mkdir failed yet the path is already gone: a concurrent
+            # contender's stale-takeover rm -rf landed in between (the next
+            # mkdir may win — retry), or the parent is genuinely unwritable
+            # (a real failure — die after a bounded wait instead of spinning
+            # forever silently, the same guard the tencentdb claim carries).
+            MEM0_CLAIM_VANISHED=$((MEM0_CLAIM_VANISHED + 1))
+            if [ "$MEM0_CLAIM_VANISHED" -ge 20 ]; then
+              die "cannot create the mem0 arm claim at $MEM0_ARM_CLAIM"
+            fi
+            sleep 0.1
+            continue
+          fi
+          MEM0_CLAIM_VANISHED=0
           MEM0_CLAIM_PID="$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null || true)"
           if [ -n "$MEM0_CLAIM_PID" ]; then
             if kill -0 "$MEM0_CLAIM_PID" 2>/dev/null || ps -p "$MEM0_CLAIM_PID" >/dev/null 2>&1; then
-              die "another mem0 server arm driver (pid $MEM0_CLAIM_PID) holds the machine-wide claim; port $MEM0_SERVER_PORT and the mem0-server-* containers belong to it — let it finish or stop it first"
+              die "another mem0 server arm driver (pid $MEM0_CLAIM_PID) holds the machine-wide claim; port $MEM0_SERVER_PORT and the mem0-server-* containers belong to it — let it finish or stop it first (if that pid was recycled by an unrelated process after a SIGKILLed driver, remove $MEM0_ARM_CLAIM and retry)"
             fi
             rm -rf "$MEM0_ARM_CLAIM"  # dead holder: stale takeover
             continue
@@ -674,6 +721,13 @@ case "$INTEGRATION_NAME" in
           sleep 0.1
         done
         printf '%s\n' "$$" > "$MEM0_ARM_CLAIM/pid"
+        # A concurrent contender's stale-takeover rm -rf can land between our
+        # winning mkdir and that write (or the write lands inside its fresh
+        # dir): if the pid does not read back as ours the claim was stolen
+        # mid-acquire — die rather than run two arms that would sweep each
+        # other's containers. No false positive: a contender only rm's a
+        # claim whose pid reads dead, and ours is live from this point.
+        [ "$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ] || die "the mem0 arm claim at $MEM0_ARM_CLAIM was stolen mid-acquire by a concurrent driver — retry the arm"
         # Registered BEFORE the stack starts: a health-timeout die must not
         # leak the containers or the claim. Plain docker rm -f on exit: the
         # store lives on the host volumes (<run-root>/mem0-server), so a resume
@@ -812,7 +866,7 @@ case "$INTEGRATION_NAME" in
         # and let the pre-run sweep remove a live peer's tdai-* container.
         # ps -p sees any pid regardless of owner.
         if kill -0 "$TDAI_CLAIM_PID" 2>/dev/null || ps -p "$TDAI_CLAIM_PID" >/dev/null 2>&1; then
-          die "another tencentdb arm driver (pid $TDAI_CLAIM_PID) holds the machine-wide claim; port 8420 and the tdai-* containers belong to it — let it finish or stop it first"
+          die "another tencentdb arm driver (pid $TDAI_CLAIM_PID) holds the machine-wide claim; port 8420 and the tdai-* containers belong to it — let it finish or stop it first (if that pid was recycled by an unrelated process after a SIGKILLed driver, remove $TDAI_ARM_CLAIM and retry)"
         fi
         rm -rf "$TDAI_ARM_CLAIM"  # dead holder: stale takeover
         continue
@@ -827,6 +881,12 @@ case "$INTEGRATION_NAME" in
       sleep 0.1
     done
     printf '%s\n' "$$" > "$TDAI_ARM_CLAIM/pid"
+    # Same mid-acquire theft guard as the mem0 claim: a contender's
+    # stale-takeover rm -rf landing between our mkdir and this write (or the
+    # write landing in its fresh dir) must not leave two drivers each
+    # believing they hold the claim — both would sweep the other's
+    # containers. A live pid is never read as stale, so this cannot misfire.
+    [ "$(cat "$TDAI_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ] || die "the tencentdb arm claim at $TDAI_ARM_CLAIM was stolen mid-acquire by a concurrent driver — retry the arm"
     resolve_recorder
     write_recorder_env "MEMORY"
     # Registered BEFORE the container starts: a health-timeout die inside
@@ -1004,6 +1064,14 @@ run_instance_mem0() {
     server) extra=("agent.memory.search_timeout=30") ;;
     library) extra=("agent.memory.run_root=$RUN_ROOT") ;;
   esac
+  if [ "$MEM0_MODE" != "platform" ]; then
+    # The yaml's recall_min_score floor is calibrated on the platform's
+    # combined 0-1 score; the OSS hybrid score is a different scale (scores
+    # are never compared across modes), so server/library arms run with the
+    # host-side floor OFF until a calibration pair picks a per-mode value
+    # (the --config value parses as JSON: null -> None disables the floor).
+    extra+=("agent.memory.recall_min_score=null")
+  fi
   run_instance_annotate_lane "$1" mem0_bridge.run.swebench "$MEM0_USER_ID" ${extra[@]+"${extra[@]}"}
 }
 

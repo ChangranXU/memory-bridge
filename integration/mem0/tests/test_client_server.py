@@ -44,8 +44,9 @@ def test_health_probes_setup_status_not_health():
 
 
 def test_no_auth_header_when_server_api_key_is_empty():
-    """AUTH_DISABLED containers get NO credential header: a presented token
-    would reach the JWT path and 500 without a configured JWT_SECRET."""
+    """AUTH_DISABLED containers get NO credential header: a presented
+    X-API-Key would 401 on the DB api-key path (only a Bearer token would
+    reach the JWT path and 500 without a configured JWT_SECRET)."""
     store, requests = make_store(lambda r: httpx.Response(200, json={}))
     store.health()
     assert "X-API-Key" not in requests[0].headers
@@ -94,6 +95,34 @@ def test_add_omits_prompt_when_guidelines_empty():
     assert "prompt" not in body_of(requests[0])
 
 
+def test_add_fails_closed_on_a_shapeless_200():
+    """A 200 that is not the results envelope is drift, not "stored nothing":
+    coercing it to [] would let the backend clear the retained batch (silent
+    message loss). An empty results list stays a legitimate no-op add."""
+    store, _ = make_store(lambda r: httpx.Response(200, json={"message": "ok"}))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.add(messages=[{"role": "user", "content": "x"}], user_id="alice")
+    assert excinfo.value.status_code == 502
+    assert "message" in excinfo.value.reason  # the drifted body's keys, never its content
+
+    store, _ = make_store(lambda r: httpx.Response(200, content=b"null"))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.add(messages=[{"role": "user", "content": "x"}], user_id="alice")
+    assert excinfo.value.status_code == 502
+
+    store, _ = make_store(lambda r: httpx.Response(200, json={"results": []}))
+    assert store.add(messages=[{"role": "user", "content": "x"}], user_id="alice") == []
+
+
+def test_search_fails_closed_on_a_shapeless_200():
+    """Same rule as add: a drifted envelope coerced to [] would be CACHED by
+    the recall path as an authoritative empty answer — silent blindness."""
+    store, _ = make_store(lambda r: httpx.Response(200, json={"message": "ok"}))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.search(query="q", user_id="alice", top_k=5, threshold=0.0)
+    assert excinfo.value.status_code == 502
+
+
 def test_add_uses_the_extended_add_timeout():
     """An infer=true add is one extraction LLM round-trip inside the request —
     far past the 30 s client default for reasoning-style models."""
@@ -138,6 +167,15 @@ def test_get_all_uses_query_params_and_clamps_to_the_server_cap():
     # The entity filter is hard-required by the engine; the server caps top_k
     # at ALL_MEMORIES_LIMIT=1000 — the store clamps explicitly.
     assert dict(requests[0].url.params) == {"user_id": "alice", "top_k": "1000"}
+
+
+def test_get_all_fails_closed_on_a_shapeless_200():
+    """Same rule as add/search: a drifted envelope coerced to [] would
+    silently truncate the final dump with no counter moving."""
+    store, _ = make_store(lambda r: httpx.Response(200, json={"message": "ok"}))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.get_all(user_id="alice", limit=10)
+    assert excinfo.value.status_code == 502
 
 
 def test_update_sends_set_fields_then_echoes_via_get():

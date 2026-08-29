@@ -38,14 +38,14 @@
 ## 在其上构建集成
 
 1. **子类化 `BaseMemoryBackend`**,实现抽象钩子(存储 / 提取 / 检索 / 渲染,
-   以及追踪适配三件套)——详见[记忆生命周期](../doc/memory-lifecycle.zh-CN.md)。
+   以及追踪适配三件套)——详见[记忆生命周期](../docs/zh/concepts/memory-lifecycle.md)。
 2. **完成绑定:**子类化 `MemoryAgent` 并设置 `backend_class`(通常还需一个
    `MemoryConfig` 子类),再通过 `bind_swebench_app()` 接入运行器——详见
-   [架构](../doc/architecture.zh-CN.md)。若目标宿主不是 mini-swe-agent,
+   [架构](../docs/zh/concepts/architecture.md)。若目标宿主不是 mini-swe-agent,
    用等价的运行器将智能体循环接入 `MemoryAgent` 子类即可——后端和端点层
    无需改动。
 3. **将存储适配到共享契约**,实现一个 `MemoryEndpoint`——详见
-   [记忆端点 API](../doc/endpoint-api.zh-CN.md)。
+   [记忆端点 API](../docs/zh/api-reference/overview.md)。
 
 两个参考实现:[`integration/cure_memory`](../integration/cure_memory/README.md)
 与 [`integration/mem0`](../integration/mem0/README.md)。

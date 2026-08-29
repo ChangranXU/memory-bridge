@@ -44,15 +44,15 @@ in, so adding a new memory system requires no changes here.
 
 1. **Subclass `BaseMemoryBackend`** and implement the abstract hooks
    (store / extract / search / render, plus the tracing adapter trio) —
-   see [memory lifecycle](../doc/memory-lifecycle.md).
+   see [memory lifecycle](../docs/en/concepts/memory-lifecycle.md).
 2. **Bind it to the runner:** subclass `MemoryAgent` with `backend_class`
    (and usually a `MemoryConfig` subclass), then wire it through
-   `bind_swebench_app()` — see [architecture](../doc/architecture.md). For
+   `bind_swebench_app()` — see [architecture](../docs/en/concepts/architecture.md). For
    a non-mini-swe-agent host, replace this step with an equivalent runner
    that hooks your agent's loop into the `MemoryAgent` subclass — the
    backend and endpoint layers require no changes.
 3. **Adapt your store to the shared contract** with a `MemoryEndpoint`
-   implementation — see [endpoint API](../doc/endpoint-api.md).
+   implementation — see [endpoint API](../docs/en/api-reference/overview.md).
 
 The two reference implementations are
 [`integration/cure_memory`](../integration/cure_memory/README.md) and

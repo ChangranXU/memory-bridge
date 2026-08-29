@@ -94,6 +94,7 @@ API=openai-chat
 | `EMBEDDING_BASE_URL` | Embedding endpoint (part of the quartet — see `EMBEDDING_MODEL`). |
 | `EMBEDDING_DIMENSIONS` | Embedding dimensions (part of the quartet — see `EMBEDDING_MODEL`). |
 | `MEM0_API_KEY` | mem0 Platform API key (bundle-root `.env`; platform mode only). |
+| `RERANKER_*` | Reserved for a future mem0 OSS search-reranker lane ([mem0 reranker docs](https://docs.mem0.ai/open-source/features/reranker-search)); no arm reads these keys today. |
 
 {% hint style="warning" %}
 Credentials stay in pydantic fields with `exclude=True, repr=False`. Only sanitized URLs reach artifacts and logs — userinfo/query/fragment stripped, trajectory IDs replaced by their 16-hex hash prefix.

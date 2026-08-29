@@ -52,7 +52,10 @@ never diverge. Per mode:
   engine embeds on every add and every search, no lexical fallback). The
   store lives on run-root volumes under `<run-root>/mem0-server/` (pg data +
   history); containers and the network are removed on exit, and a resume
-  recreates the stack over the same volumes.
+  recreates the stack over the same volumes. Note the OSS server persists
+  the `/configure` payload — roster + embedding API keys included — into the
+  pg volume, so those keys sit at rest under the (gitignored) run root for
+  the volume's lifetime; they never reach argv or logs.
 - `library` — the in-process `mem0ai` engine (`from mem0 import Memory`),
   which enters the shared env ONLY via the opt-in root dependency group
   `mem0-library`: every library-mode instance invocation carries
@@ -185,3 +188,19 @@ verified against the vendored tree, pin in `VENDORING.md`):
   `search_errors` at the shared 10 s default. Library mode ignores
   `search_timeout` by design (in-process; the shared stance bounds network
   calls only).
+- The host-side `recall_min_score` floor is calibrated on the platform's
+  combined 0-1 score (the shipped yaml's 0.1); the OSS hybrid score is a
+  different scale and scores are never compared across modes, so the driver
+  passes `agent.memory.recall_min_score=null` for server/library arms —
+  the floor stays off there until a calibration pair picks a per-mode value.
+- Reranker lane (reserved, not wired): the OSS engine takes an optional
+  search reranker (`reranker: {provider, config}` in the config dict,
+  opt-in per search with `rerank: true`; a failed rerank logs a warning and
+  falls back to the pre-rerank ranking — never fail-closed), while the
+  hosted platform's v3 search has no rerank channel, so the lane is
+  OSS-only. `.env` space is already reserved: `load_model_env` sources the
+  roster wholesale, so future `RERANKER_*` keys flow with no structural
+  change — when the lane lands, give them the `EMBEDDING_*` treatment
+  (the driver's stale-export unset line, mode-gated bridge validation, and
+  the mapping into the library config dict / the server `/configure`
+  payload).

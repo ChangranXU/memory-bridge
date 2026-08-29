@@ -47,8 +47,8 @@ from mem0_bridge.stores import Mem0Store, open_store
 logger = logging.getLogger("mem0_bridge.backend")
 
 _SUPPORTED_ROLES = frozenset({"user", "assistant", "system"})
-# The final memory dump is diagnostic: the store paginates to exhaustion up to
-# this ceiling, far above what a run root's episodes produce.
+# The final memory dump is diagnostic: the store walks up to this ceiling
+# (the OSS server clamps at its own hard 1000-row cap — see stores/).
 _FINAL_DUMP_LIMIT = 10000
 _ADAPTER_NAME = "mem0"
 
@@ -61,7 +61,7 @@ except Exception:  # source tree without installed metadata
 
 
 class Mem0Backend(BaseMemoryBackend):
-    """Drives the mem0 Platform's extraction lifecycle for one SWE-bench episode."""
+    """Drives the configured mode's mem0 extraction lifecycle for one SWE-bench episode."""
 
     _COUNTERS = ("memories_added", "memories_updated", "memories_deleted", "search_calls")
 
@@ -349,7 +349,7 @@ class Mem0Backend(BaseMemoryBackend):
         self._pending.append({"role": role, "content": text})
 
     # ------------------------------------------------------------------
-    # Extraction (hosted)
+    # Extraction
     # ------------------------------------------------------------------
     def _perform_extraction(self, step) -> None:
         """Flush the pending buffer as one store add (the extraction).

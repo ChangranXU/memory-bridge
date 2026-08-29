@@ -100,7 +100,7 @@ roster 代理（MAIN lane = 基准模型，EXTRACT lane = 提取 LLM），运行
 
 共享字段（`enabled`、`scope`、`user_id`、`output_dir`、`strict`、
 `max_message_chars`、`inject_recall`、`max_memories`、`max_total_recall_chars`、
-`max_chars_per_memory`、`annotate`、`annotate_*`）见[记忆生命周期](../../doc/memory-lifecycle.zh-CN.md)。
+`max_chars_per_memory`、`annotate`、`annotate_*`）见[记忆生命周期](../../docs/zh/concepts/memory-lifecycle.md)。
 CURE 特有字段:
 
 | 键 | 默认值 | 说明 |
@@ -135,7 +135,7 @@ CURE 特有字段:
 当 `annotate=true`（默认）且双 lane 均通过 roster 代理时,后端向
 `trajectory.jsonl` 标注 schema-v6 `memory_*` 事件:会话/角色绑定、带变更审计的
 生成操作、检索操作、投递证明。完整协议详见
-[记忆追踪协议](../../doc/tracing.zh-CN.md)。
+[记忆追踪协议](../../docs/zh/concepts/tracing-protocol.md)。
 
 ## 常见问题
 

@@ -153,7 +153,7 @@ Installed as an editable workspace member by `uv sync` at the bundle root.
 ## Config Reference (`agent.memory.*`)
 
 Shared fields are documented in
-[Memory lifecycle](../../doc/memory-lifecycle.md). mem0-specific fields:
+[Memory lifecycle](../../docs/en/concepts/memory-lifecycle.md). mem0-specific fields:
 
 | Key | Default | Description |
 |---|---|---|

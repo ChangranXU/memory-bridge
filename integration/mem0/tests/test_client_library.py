@@ -25,6 +25,17 @@ SETTINGS = {
 }
 
 
+class _CloseSpy:
+    """Counts close() calls — the fake seam for the engine's closable
+    handles (the qdrant client, the sqlite history connection)."""
+
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
 class FakeMemory:
     """Records calls and mimics the engine's wire shapes."""
 
@@ -32,6 +43,10 @@ class FakeMemory:
         self.calls: list[tuple[str, dict]] = []
         self.memories: dict[str, dict] = {}
         self.add_response = None  # override to script a raw return value
+        self.search_response = None  # same, for search
+        self.get_all_response = None  # same, for get_all
+        self.vector_store = types.SimpleNamespace(client=_CloseSpy())
+        self.db = types.SimpleNamespace(connection=_CloseSpy())
 
     def add(self, messages, **kwargs):
         self.calls.append(("add", {"messages": messages, **kwargs}))
@@ -54,6 +69,8 @@ class FakeMemory:
 
     def search(self, *, query, filters, top_k, threshold):
         self.calls.append(("search", {"query": query, "filters": filters, "top_k": top_k, "threshold": threshold}))
+        if self.search_response is not None:
+            return self.search_response
         hits = [dict(m) for m in self.memories.values() if m["user_id"] == filters.get("user_id")]
         return {"results": hits[:top_k]}
 
@@ -64,6 +81,8 @@ class FakeMemory:
 
     def get_all(self, *, filters, top_k):
         self.calls.append(("get_all", {"filters": filters, "top_k": top_k}))
+        if self.get_all_response is not None:
+            return self.get_all_response
         hits = [dict(m) for m in self.memories.values() if m["user_id"] == filters.get("user_id")]
         return {"results": hits[:top_k]}
 
@@ -153,11 +172,23 @@ def test_add_is_sync_and_conveys_guidelines_via_prompt(store):
     assert store._memory.calls[1][1]["prompt"] is None
 
 
-def test_add_tolerates_a_bare_list_response(store):
+def test_add_fails_closed_on_a_shapeless_response(store):
+    """The pinned engine answers {"results": [...]} on every add path — a
+    bare list or any other shape is drift, not "stored nothing": coercing it
+    to [] would let the backend clear the retained batch (silent message
+    loss). An empty results list stays a legitimate no-op add."""
     store._memory.add_response = [{"id": "m9", "memory": "flat", "event": "ADD"}]
-    assert store.add(messages=[{"role": "user", "content": "x"}], user_id="alice") == [
-        {"id": "m9", "memory": "flat", "event": "ADD"}
-    ]
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.add(messages=[{"role": "user", "content": "x"}], user_id="alice")
+    assert excinfo.value.status_code == 502
+
+    store._memory.add_response = {"message": "ok"}
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.add(messages=[{"role": "user", "content": "x"}], user_id="alice")
+    assert excinfo.value.status_code == 502
+
+    store._memory.add_response = {"results": []}
+    assert store.add(messages=[{"role": "user", "content": "x"}], user_id="alice") == []
 
 
 def test_search_sends_entity_filter_and_explicit_threshold(store):
@@ -168,12 +199,35 @@ def test_search_sends_entity_filter_and_explicit_threshold(store):
     assert call == {"query": "facts", "filters": {"user_id": "alice"}, "top_k": 5, "threshold": 0.0}
 
 
+def test_search_fails_closed_on_a_shapeless_response(store):
+    """Same rule as add: coercing drift to [] reads as "no memories", and the
+    recall path CACHES an empty answer as authoritative — silent blindness."""
+    store._memory.search_response = {"message": "ok"}
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.search(query="facts", user_id="alice", top_k=5, threshold=0.0)
+    assert excinfo.value.status_code == 502
+
+    store._memory.search_response = [{"id": "m1"}]  # a bare list is drift too
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.search(query="facts", user_id="alice", top_k=5, threshold=0.0)
+    assert excinfo.value.status_code == 502
+
+
 def test_get_all_sends_entity_filter_and_explicit_top_k(store):
     store.add(messages=[{"role": "user", "content": "a"}, {"role": "user", "content": "b"}], user_id="alice")
     rows = store.get_all(user_id="alice", limit=10000)
     assert len(rows) == 2
     _, call = store._memory.calls[-1]
     assert call == {"filters": {"user_id": "alice"}, "top_k": 10000}
+
+
+def test_get_all_fails_closed_on_a_shapeless_response(store):
+    """Same rule as add/search: coercing drift to [] would silently truncate
+    the final dump with no counter moving."""
+    store._memory.get_all_response = {"message": "ok"}
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.get_all(user_id="alice", limit=10)
+    assert excinfo.value.status_code == 502
 
 
 def test_get_missing_id_raises_404(store):
@@ -225,6 +279,17 @@ def test_library_settings_carry_no_key_material_into_artifacts(make_backend, mon
     assert "roster-secret-key" not in artifact
     assert "emb-secret-key" not in artifact
     assert "roster-secret-key" not in json.dumps(backend.stats())
+
+
+def test_close_releases_the_engine_handles(store):
+    """qdrant-local holds an exclusive flock on its storage folder and the
+    sqlite history manager a persistent connection: both must close
+    deterministically, never at GC/process-exit time — the batch runner keeps
+    every episode in one process, and a still-alive earlier client makes the
+    next Memory over the same run root fail to construct."""
+    store.close()
+    assert store._memory.vector_store.client.closed == 1
+    assert store._memory.db.connection.closed == 1
 
 
 def test_real_memory_constructs_offline(tmp_path):

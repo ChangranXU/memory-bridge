@@ -6,6 +6,7 @@ import json
 import httpx
 import pytest
 
+from mem0_bridge.client import Mem0ApiError
 from mem0_bridge.stores import open_store
 from mem0_bridge.stores.platform import PlatformStore
 
@@ -88,6 +89,43 @@ def test_platform_get_all_limit_caps_and_an_empty_page_ends_the_walk():
     store, requests = make_store(handler)
     assert store.get_all(user_id="alice", limit=100) == []
     assert len(requests) == 1
+
+
+def test_platform_get_all_keeps_a_constant_page_size_across_the_walk():
+    """DRF computes a page's offset as (page-1)*page_size: a page_size that
+    shrinks on the final page re-picks earlier rows into the dump."""
+    total = [{"id": f"r{i}"} for i in range(120)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        page_size = int(request.url.params["page_size"])
+        start = (page - 1) * page_size
+        return httpx.Response(
+            200,
+            json={
+                "count": len(total),
+                "next": None if start + page_size >= len(total) else f"https://api.mem0.ai/v3/memories/?page={page + 1}",
+                "previous": None,
+                "results": total[start : start + page_size],
+            },
+        )
+
+    store, requests = make_store(handler)
+    rows = store.get_all(user_id="alice", limit=150)  # not a multiple of 100
+    assert [row["id"] for row in rows] == [f"r{i}" for i in range(120)]
+    assert [r.url.params["page_size"] for r in requests] == ["100", "100"]
+
+
+def test_platform_get_all_fails_closed_on_a_drifted_envelope():
+    """Same rule as add/search: a page without the results list is drift, not
+    an empty page — coercing it would silently truncate the final dump with
+    no counter moving (a null ``results`` previously crashed the walk with a
+    bare TypeError)."""
+    store, _ = make_store(lambda r: httpx.Response(200, json={"count": 1, "next": None, "results": None}))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.get_all(user_id="alice", limit=100)
+    assert excinfo.value.status_code == 502
+    assert "results" in excinfo.value.reason  # the drifted body's keys, never its content
 
 
 def test_platform_store_searches_with_explicit_threshold_and_timeout():

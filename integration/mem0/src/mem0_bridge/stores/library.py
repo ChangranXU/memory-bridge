@@ -8,9 +8,11 @@ same one.
 
 The ``mem0ai`` SDK is imported lazily: only the opt-in ``mem0-library``
 dependency group installs it, and the default shared env must stay mem0ai-free
-(the litellm conflict posture). Construction (``Memory.from_config``) is the
-validation — it builds the LLM/embedder clients and the local qdrant store on
-the spot, so a misconfiguration fails the backend start, not the first add.
+(the litellm conflict posture). Construction (``Memory.from_config``)
+validates the wiring — the local qdrant store is built on the spot, so a bad
+path or dims fails the backend start; credentials only build client objects,
+so a bad key surfaces at the first add (contained, retried via the retained
+batch).
 
 Timeout semantics: the store accepts the protocol's ``timeout`` and IGNORES it
 — the shared stance bounds only network calls (``shared_bridge/config.py``),
@@ -22,7 +24,7 @@ and cannot interrupt the local lemmatize/BM25 CPU work regardless.
 
 import os
 
-from mem0_bridge.client import Mem0ApiError, _normalize_result
+from mem0_bridge.client import Mem0ApiError, _results_of, _shape_of
 from mem0_bridge.stores import Receipt
 
 
@@ -129,12 +131,14 @@ class LibraryStore:
             metadata=metadata,
             prompt=guidelines.strip() if guidelines and guidelines.strip() else None,
         )
-        # The main path wraps receipts as {"results": [...]}; tolerate the bare
-        # list some early-return paths use.
-        items = response.get("results") if isinstance(response, dict) else response
-        if not isinstance(items, list):
-            return []
-        return [_normalize_result(item) for item in items if isinstance(item, dict)]
+        # Every engine path answers {"results": [...]} (verified against the
+        # pinned engine — no bare-list path exists). Fail closed on anything
+        # else: coercing drift to [] would report "success, zero memories"
+        # and the backend would clear the retained batch — silent message
+        # loss. An empty results list stays a legitimate no-op add.
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise Mem0ApiError(502, f"mem0 library add returned an unrecognizable response: {_shape_of(response)}")
+        return _results_of(response)
 
     def search(
         self,
@@ -147,12 +151,13 @@ class LibraryStore:
     ) -> list[dict]:
         # threshold is always sent explicitly (the OSS default 0.1 drifts); the
         # entity filter is hard-required by the engine. timeout is ignored by
-        # design (module docstring).
+        # design (module docstring). Fail closed on a shapeless response, same
+        # as add: coercing drift to [] reads as "no memories", and the recall
+        # path CACHES an empty answer as authoritative — silent blindness.
         response = self._memory.search(query=query, filters={"user_id": user_id}, top_k=top_k, threshold=threshold)
-        results = response.get("results") if isinstance(response, dict) else None
-        if not isinstance(results, list):
-            return []
-        return [item for item in results if isinstance(item, dict)]
+        if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+            raise Mem0ApiError(502, f"mem0 library search returned an unrecognizable response: {_shape_of(response)}")
+        return [item for item in response["results"] if isinstance(item, dict)]
 
     def get(self, memory_id: str) -> dict:
         row = self._memory.get(memory_id)
@@ -166,7 +171,9 @@ class LibraryStore:
         response = self._memory.get_all(filters={"user_id": user_id}, top_k=limit)
         results = response.get("results") if isinstance(response, dict) else None
         if not isinstance(results, list):
-            return []
+            # Fail closed like add/search: a drifted envelope coerced to []
+            # would silently truncate the final dump with no counter moving.
+            raise Mem0ApiError(502, f"mem0 library get-all returned an unrecognizable response: {_shape_of(response)}")
         return [item for item in results if isinstance(item, dict)][:limit]
 
     def update(self, memory_id: str, *, text: str | None = None, metadata: dict | None = None) -> dict:
@@ -185,9 +192,15 @@ class LibraryStore:
             raise _maybe_not_found(e) from e
 
     def close(self) -> None:
-        # The engine owns local files (qdrant/sqlite) that the process exit
-        # releases; it exposes no reliable close hook.
-        pass
+        # Deterministic release, not GC-timed: the engine has no close hook,
+        # but the batch runner keeps every episode of an arm in ONE process —
+        # qdrant-local holds an exclusive flock on its storage folder (a
+        # later Memory over the same run root fails to construct while an
+        # earlier client is still alive), and the sqlite history manager
+        # keeps a persistent connection. The base nulls the store right
+        # after this returns, so a closed engine is never used again.
+        self._memory.vector_store.client.close()
+        self._memory.db.connection.close()
 
 
 def _maybe_not_found(error: ValueError) -> Mem0ApiError:

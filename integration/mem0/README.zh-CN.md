@@ -134,7 +134,7 @@ integration/mem0/
 
 ## 配置参考(`agent.memory.*`)
 
-共享字段见[记忆生命周期](../../doc/memory-lifecycle.zh-CN.md)。
+共享字段见[记忆生命周期](../../docs/zh/concepts/memory-lifecycle.md)。
 mem0 特有字段:
 
 | 键 | 默认值 | 说明 |

@@ -58,6 +58,21 @@ def test_search_threshold_bounds():
         Mem0Config(search_threshold=1.5)
 
 
+def test_recall_min_score_null_cli_spec_disables_the_floor():
+    """The driver passes agent.memory.recall_min_score=null for server/library
+    arms (the floor is calibrated on the platform's 0-1 score). Pin the chain
+    that turns the CLI spec into None: mini-swe-agent JSON-parses the value,
+    recursive_merge overrides the yaml's 0.1, and Mem0Config accepts explicit
+    None (the floor gates on `is not None`)."""
+    from minisweagent.config import get_config_from_spec
+    from minisweagent.utils.serialize import recursive_merge
+
+    spec = get_config_from_spec("agent.memory.recall_min_score=null")
+    merged = recursive_merge({"agent": {"memory": {"recall_min_score": 0.1}}}, spec)
+    assert merged["agent"]["memory"]["recall_min_score"] is None
+    assert Mem0Config(**merged["agent"]["memory"]).recall_min_score is None
+
+
 def test_defaults_yaml_overlay_parses():
     from pathlib import Path
 

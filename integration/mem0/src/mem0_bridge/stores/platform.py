@@ -6,7 +6,7 @@ uniform store signature, and ``get_all`` adds the pagination loop the raw
 client deliberately leaves to the caller.
 """
 
-from mem0_bridge.client import Mem0PlatformClient
+from mem0_bridge.client import Mem0ApiError, Mem0PlatformClient, _shape_of
 from mem0_bridge.stores import Receipt
 
 
@@ -59,13 +59,23 @@ class PlatformStore:
 
         Termination rides the envelope's own ``next`` field (null = last
         page), pinned against the live API; an empty page also ends the walk
-        so a drifting ``next`` can never spin the loop forever.
+        so a drifting ``next`` can never spin the loop forever. The page size
+        stays CONSTANT across the walk: DRF computes a page's offset as
+        (page-1)*page_size, so shrinking the size on the final page would
+        re-pick earlier rows; the trailing slice trims the overage instead.
+
+        Fails closed on a drifted envelope (a page without the ``results``
+        list), same discipline as add/search: coercing it to [] would
+        silently truncate the final dump with no counter moving.
         """
         rows: list[dict] = []
         page = 1
         while len(rows) < limit:
-            envelope = self._client.get_all(user_id=user_id, page_size=min(100, limit - len(rows)), page=page)
-            batch = [item for item in envelope.get("results", []) if isinstance(item, dict)]
+            envelope = self._client.get_all(user_id=user_id, page_size=100, page=page)
+            results = envelope.get("results")
+            if not isinstance(results, list):
+                raise Mem0ApiError(502, f"mem0 platform get-all returned an unrecognizable response: {_shape_of(envelope)}")
+            batch = [item for item in results if isinstance(item, dict)]
             rows.extend(batch)
             if not envelope.get("next") or not batch:
                 break

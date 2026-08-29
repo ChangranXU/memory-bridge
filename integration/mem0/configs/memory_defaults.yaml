@@ -36,9 +36,12 @@ agent:
     # The single relevance door: the shared host-side floor on the platform's
     # combined multi-signal score (0-1, present on search rows). 0.1 is the
     # documented v3 server default — a defensible first cut, a hypothesis to
-    # measure rather than a truth; server/library score scales differ and
-    # calibrate separately. While set, the arm searches with a wider top_k so
-    # the floor has a pool to filter.
+    # measure rather than a truth. The OSS hybrid score is a different scale
+    # (scores are never compared across modes): the driver passes
+    # agent.memory.recall_min_score=null for server/library arms, keeping the
+    # floor platform-only until a calibration pair picks a per-mode value.
+    # While set, the arm searches with a wider top_k so the floor has a pool
+    # to filter.
     recall_min_score: 0.1
     # Recall-query rewriter via the QUERY proxy lane (the driver exports
     # MEMORY_QUERY_* per instance; the lane shares the flat BASE_URL).

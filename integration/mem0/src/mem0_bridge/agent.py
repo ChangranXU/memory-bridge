@@ -1,5 +1,5 @@
 """mem0 memory agent (automatic-extraction arm): the shared memory agent shell
-bound to the mem0 Platform backend."""
+bound to the mem0 backend (the mode selects the deployment it talks to)."""
 
 from pydantic import Field
 
@@ -14,7 +14,7 @@ class Mem0AgentConfig(MemoryAgentConfig):
 
 
 class Mem0Agent(MemoryAgent):
-    """MemoryAgent with host-side mem0 Platform recording/extraction/recall."""
+    """MemoryAgent with host-side mem0 recording/extraction/recall."""
 
     config_class = Mem0AgentConfig
     backend_class = Mem0Backend

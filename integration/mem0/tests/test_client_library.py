@@ -45,6 +45,7 @@ class FakeMemory:
         self.add_response = None  # override to script a raw return value
         self.search_response = None  # same, for search
         self.get_all_response = None  # same, for get_all
+        self.get_response = None  # same, for get
         self.vector_store = types.SimpleNamespace(client=_CloseSpy())
         self.db = types.SimpleNamespace(connection=_CloseSpy())
 
@@ -76,6 +77,8 @@ class FakeMemory:
 
     def get(self, memory_id):
         self.calls.append(("get", {"memory_id": memory_id}))
+        if self.get_response is not None:
+            return self.get_response
         memory = self.memories.get(memory_id)
         return dict(memory) if memory is not None else None
 
@@ -234,6 +237,15 @@ def test_get_missing_id_raises_404(store):
     with pytest.raises(Mem0ApiError) as excinfo:
         store.get("missing")
     assert excinfo.value.status_code == 404
+
+
+def test_get_fails_closed_on_a_drifted_row(store):
+    """A non-null non-dict row is drift, not an empty memory: the endpoint
+    adapter's ownership check would misreport it as a plain 404."""
+    store._memory.get_response = ["not", "a", "row"]
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.get("m1")
+    assert excinfo.value.status_code == 502
 
 
 def test_update_echoes_via_get_and_maps_missing_404(store):

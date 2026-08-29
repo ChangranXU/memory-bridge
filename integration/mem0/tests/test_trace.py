@@ -339,6 +339,30 @@ def test_receipts_the_state_does_not_show_are_flagged_drift(traced_backend, capt
     backend.finalize()
 
 
+def test_create_then_delete_receipt_pair_nets_to_absent_cleanly(traced_backend, capture_server, fake_client, monkeypatch):
+    """A same-id ADD+DELETE receipt pair in one batch nets to absent: the
+    engine mints ids, so a delete receipt on an id the same batch created is
+    necessarily the later action — the receipts are faithfully reflected and
+    the audit must stay clean (no false drift line, no partial downgrade)."""
+    monkeypatch.setattr(
+        fake_client,
+        "add",
+        lambda **kwargs: [
+            {"id": "m9", "memory": "contradicted fact", "event": "ADD"},
+            {"id": "m9", "memory": None, "event": "DELETE"},
+        ],
+    )
+    backend = traced_backend()
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)
+    assert [change["action"] for change in _changes(capture_server)] == ["create", "delete"]
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["state_evidence"] == "complete"
+    assert "unexplained" not in end["extensions"]["mem0"]
+    backend.finalize()
+
+
 def test_state_changes_without_receipts_are_flagged_drift(traced_backend, capture_server, fake_client, monkeypatch):
     """The reverse direction: the store mutated but the engine reported no
     receipts, so no change can be cited — the generation posts none and the

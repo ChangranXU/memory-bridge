@@ -128,6 +128,26 @@ def test_platform_get_all_fails_closed_on_a_drifted_envelope():
     assert "results" in excinfo.value.reason  # the drifted body's keys, never its content
 
 
+def test_platform_get_all_does_not_end_the_walk_on_drifted_page_items():
+    """The walk ends on the envelope's own null ``next`` or a genuinely EMPTY
+    page — never on the filtered batch: a page whose items are all non-dict
+    drift with ``next`` still set must not read as end-of-stream and silently
+    truncate the dump."""
+    pages = {
+        1: httpx.Response(
+            200, json={"count": 2, "next": "https://api.mem0.ai/v3/memories/?page=2", "results": ["drift", 7]}
+        ),
+        2: httpx.Response(200, json={"count": 2, "next": None, "results": [{"id": "p2a"}]}),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return pages[int(request.url.params["page"])]
+
+    store, requests = make_store(handler)
+    assert [row["id"] for row in store.get_all(user_id="alice", limit=100)] == ["p2a"]
+    assert [r.url.params["page"] for r in requests] == ["1", "2"]
+
+
 def test_platform_store_searches_with_explicit_threshold_and_timeout():
     store, requests = make_store(lambda r: httpx.Response(200, json={"results": []}))
     assert store.search(query="q", user_id="alice", top_k=7, threshold=0.25, timeout=3.0) == []

@@ -43,7 +43,7 @@ never diverge. Per mode:
   async with event polling — `poll_budget`/`poll_interval` are
   platform-only (server/library adds are synchronous).
 - `server` — a per-run self-hosted OSS server stack the driver manages: TWO
-  containers on one bridge network (`pgvector/pgvector:pg17`, no published
+  containers on one bridge network (`pgvector/pgvector:0.8.6-pg17`, no published
   port, plus the API server built at runtime from `vendor/mem0/` with the
   engine pinned `mem0ai==2.0.19`), published at `127.0.0.1:8890` — a
   machine-wide single-arm claim (`${TMPDIR:-/tmp}/mem0-arm-claim`) makes a

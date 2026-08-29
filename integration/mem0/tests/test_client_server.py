@@ -155,6 +155,25 @@ def test_get_maps_200_null_to_missing_404():
     assert excinfo.value.status_code == 404
 
 
+def test_get_fails_closed_on_a_drifted_200():
+    """A non-null non-dict body is drift, not an empty row: the endpoint
+    adapter's ownership check would misreport it as a plain 404."""
+    store, _ = make_store(lambda r: httpx.Response(200, json=["not", "a", "row"]))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.get("r1")
+    assert excinfo.value.status_code == 502
+
+
+def test_health_fails_closed_on_a_drifted_200():
+    """The server image is pinned by tag, so a shape-changed setup-status
+    body means the pin broke — fail the startup loudly instead of running
+    the arm against a drifted server."""
+    store, _ = make_store(lambda r: httpx.Response(200, json="alive"))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        store.health()
+    assert excinfo.value.status_code == 502
+
+
 def test_get_all_uses_query_params_and_clamps_to_the_server_cap():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

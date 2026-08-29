@@ -65,7 +65,12 @@ class ServerStore:
     # ------------------------------------------------------------------
     def health(self) -> dict:
         body = self._request("GET", "/auth/setup-status")
-        return body if isinstance(body, dict) else {}
+        # A drifted 200 fails closed like every other op: the server image is
+        # pinned by tag, so a shape change means the pin broke — better a loud
+        # startup failure than a run against a drifted server.
+        if not isinstance(body, dict):
+            raise Mem0ApiError(502, f"mem0 server health returned an unrecognizable response: {_shape_of(body)}")
+        return body
 
     def add(
         self,
@@ -119,7 +124,11 @@ class ServerStore:
             # The server's GET answers 200 null for unknown ids — map it to the
             # protocol's missing-id convention (PUT/DELETE already 404).
             raise Mem0ApiError(404, f"memory {memory_id} not found")
-        return body if isinstance(body, dict) else {}
+        if not isinstance(body, dict):
+            # Drift must not masquerade as an empty row: the endpoint's
+            # ownership check would misreport it as a plain 404.
+            raise Mem0ApiError(502, f"mem0 server get returned an unrecognizable response: {_shape_of(body)}")
+        return body
 
     def get_all(self, *, user_id: str, limit: int) -> list[dict]:
         # Query-param scoped get-all; the entity filter is hard-required by the

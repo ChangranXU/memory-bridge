@@ -111,6 +111,17 @@ openai_v1_root() {
   esac
 }
 
+# json_escape S — escape the two characters that break a JSON string literal
+# in a shell-interpolated heredoc (a `"` or `\` in a roster key or model name
+# would otherwise die as an HTTP 400 from /configure, fail-loud but with a
+# misleading reason); control characters never appear in these values.
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  printf %s "$s"
+}
+
 # require_mem0_embedding_quartet — server/library modes FAIL CLOSED without the
 # full quartet (tencentdb's all-or-none check shape, but absence is FATAL
 # here): the OSS engine embeds on every add and every search with no
@@ -463,6 +474,11 @@ start_tdai_container() {
 # `docker image inspect` short-circuit would then keep reusing).
 MEM0_SERVER_PORT=8890
 MEM0_ENGINE_PIN=2.0.19
+# Versioned, not the floating pg17: the rest of the stack is double-pinned
+# (engine + routes), and a floating pgvector would silently move the vector
+# extension version under a resumed run-root volume. 0.8.6 is the extension
+# the stack was verified with.
+MEM0_PG_IMAGE="pgvector/pgvector:0.8.6-pg17"
 
 build_mem0_server_image() {
   local clone="$INTEGRATION/vendor/mem0"
@@ -487,7 +503,7 @@ build_mem0_server_image() {
   # for pip.
   local ctx="$MEM0_SERVER_ROOT/build-context"
   rm -rf "$ctx"
-  cp -R "$clone/server" "$ctx"
+  cp -R "$clone/server" "$ctx" || die "failed to stage the vendored server tree from $clone/server"
   sed -i.bak -e "s/^mem0ai>=.*\$/mem0ai==${MEM0_ENGINE_PIN}/" -e 's/^psycopg>=/psycopg[binary]>=/' "$ctx/requirements.txt" && rm -f "$ctx/requirements.txt.bak"
   grep -q "^mem0ai==${MEM0_ENGINE_PIN}\$" "$ctx/requirements.txt" || die "failed to pin mem0ai==${MEM0_ENGINE_PIN} in the staged build context"
   grep -q '^psycopg\[binary\]>=' "$ctx/requirements.txt" || die "failed to switch psycopg to the binary variant in the staged build context"
@@ -511,8 +527,9 @@ start_mem0_server_stack() {
   MEM0_SERVER_ROOT="$RUN_ROOT/mem0-server"
   # Mounted AT /app/history: the server's SQLiteManager does a bare
   # sqlite3.connect with NO makedirs and the image ships no such directory —
-  # boot-fatal without the mount.
-  mkdir -p "$MEM0_SERVER_ROOT/history"
+  # boot-fatal without the mount (and an unchecked failure here would let
+  # the docker -v auto-create a daemon-owned dir instead).
+  mkdir -p "$MEM0_SERVER_ROOT/history" || die "failed to create $MEM0_SERVER_ROOT/history"
   build_mem0_server_image
 
   local base="mem0-server-$(basename "$RUN_ROOT")"
@@ -525,12 +542,17 @@ start_mem0_server_stack() {
   # the original password. It lives only in the run root (output/ is
   # gitignored) and rides docker -e NAME, never argv (rule 8).
   local password_file="$MEM0_SERVER_ROOT/pg_password"
-  if [ -f "$password_file" ]; then
-    POSTGRES_PASSWORD="$(cat "$password_file")"
-  else
-    ( umask 077 && openssl rand -hex 16 > "$password_file" )
-    POSTGRES_PASSWORD="$(cat "$password_file")"
+  if [ ! -s "$password_file" ]; then
+    # Fail loudly AND repair: a failed openssl still leaves the file created
+    # (the redirect does), postgres then refuses to boot on the empty
+    # password, and every resume would re-read the poisoned file — dying at
+    # the readiness timeout with nothing pointing at it. The -s test also
+    # regenerates such a poisoned empty file instead of reusing it.
+    ( umask 077 && openssl rand -hex 16 > "$password_file" ) \
+      || die "openssl rand failed to generate the pg password at $password_file"
+    [ -s "$password_file" ] || die "the pg password file at $password_file is empty"
   fi
+  POSTGRES_PASSWORD="$(cat "$password_file")"
   export POSTGRES_PASSWORD
 
   docker network create "$MEM0_SERVER_NET" >/dev/null || die "failed to create the mem0 server network"
@@ -540,7 +562,7 @@ start_mem0_server_stack() {
   docker run -d --name "$MEM0_PG_CONTAINER" --network "$MEM0_SERVER_NET" \
     -e POSTGRES_USER=mem0 -e POSTGRES_PASSWORD -e POSTGRES_DB=mem0_app \
     -v "$MEM0_SERVER_ROOT/pg:/var/lib/postgresql/data" \
-    pgvector/pgvector:pg17 >/dev/null || die "failed to start the pg container (pgvector/pgvector:pg17)"
+    "$MEM0_PG_IMAGE" >/dev/null || die "failed to start the pg container ($MEM0_PG_IMAGE)"
   local i
   for i in $(seq 1 60); do
     docker exec "$MEM0_PG_CONTAINER" pg_isready -U mem0 -d mem0_app >/dev/null 2>&1 && break
@@ -553,8 +575,10 @@ start_mem0_server_stack() {
 
   # Precreate the vector table at the roster's embedding dims BEFORE the
   # server boots: the server's DEFAULT_CONFIG has no dims channel, so its
-  # eager create_col would otherwise birth the collection at the pgvector
-  # default (1536) and every insert would then fail with "expected 1536
+  # first-op create_col (pgvector creates the collection lazily, at the
+  # construction-time dims the config defaulted to) would otherwise birth the
+  # collection at the pgvector default (1536) and every insert would then
+  # fail with "expected 1536
   # dimensions" — SILENTLY (the add still returns ADD receipts; only the
   # container log shows the DataException). _ensure_collection skips an
   # existing table, so this precreate is authoritative. The table DDL mirrors
@@ -625,7 +649,7 @@ configure_mem0_server() {
   # 32k matches its shipped deepseek value).
   # Credentials ride curl stdin, never argv (rule 8).
   if ! curl -sf -X POST "http://127.0.0.1:${MEM0_SERVER_PORT}/configure" -H 'Content-Type: application/json' --data-binary @- <<EOF
-{"llm": {"provider": "openai", "config": {"model": "$MODEL", "api_key": "$API_KEY", "openai_base_url": "$(openai_v1_root "$BASE_URL")", "max_tokens": 32000}}, "embedder": {"provider": "openai", "config": {"model": "$EMBEDDING_MODEL", "api_key": "$EMBEDDING_API_KEY", "openai_base_url": "$(openai_v1_root "$EMBEDDING_BASE_URL")", "embedding_dims": $EMBEDDING_DIMENSIONS}}}
+{"llm": {"provider": "openai", "config": {"model": "$(json_escape "$MODEL")", "api_key": "$(json_escape "$API_KEY")", "openai_base_url": "$(json_escape "$(openai_v1_root "$BASE_URL")")", "max_tokens": 32000}}, "embedder": {"provider": "openai", "config": {"model": "$(json_escape "$EMBEDDING_MODEL")", "api_key": "$(json_escape "$EMBEDDING_API_KEY")", "openai_base_url": "$(json_escape "$(openai_v1_root "$EMBEDDING_BASE_URL")")", "embedding_dims": $EMBEDDING_DIMENSIONS}}}
 EOF
   then
     docker logs --tail 30 "$MEM0_APP_CONTAINER" >&2 || true

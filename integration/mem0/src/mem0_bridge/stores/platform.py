@@ -75,9 +75,12 @@ class PlatformStore:
             results = envelope.get("results")
             if not isinstance(results, list):
                 raise Mem0ApiError(502, f"mem0 platform get-all returned an unrecognizable response: {_shape_of(envelope)}")
-            batch = [item for item in results if isinstance(item, dict)]
-            rows.extend(batch)
-            if not envelope.get("next") or not batch:
+            rows.extend(item for item in results if isinstance(item, dict))
+            # End on the envelope's own null ``next`` or a genuinely EMPTY
+            # page (the spin guard for a drifting ``next``) — never on the
+            # filtered batch, which would read item-level drift as
+            # end-of-stream and silently truncate the walk.
+            if not envelope.get("next") or not results:
                 break
             page += 1
         return rows[:limit]

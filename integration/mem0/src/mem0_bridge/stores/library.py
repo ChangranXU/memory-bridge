@@ -163,7 +163,11 @@ class LibraryStore:
         row = self._memory.get(memory_id)
         if row is None:
             raise Mem0ApiError(404, f"memory {memory_id} not found")
-        return row if isinstance(row, dict) else {}
+        if not isinstance(row, dict):
+            # Drift must not masquerade as an empty row: the endpoint's
+            # ownership check would misreport it as a plain 404.
+            raise Mem0ApiError(502, f"mem0 library get returned an unrecognizable response: {_shape_of(row)}")
+        return row
 
     def get_all(self, *, user_id: str, limit: int) -> list[dict]:
         # The entity filter is hard-required and the engine default top_k=20

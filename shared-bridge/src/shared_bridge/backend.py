@@ -1474,7 +1474,10 @@ class BaseMemoryBackend(ABC):
             produced=[],
             status="partial" if changes else "failed",
             error_codes=[type(exc).__name__],
-            state_evidence="unknown" if after is None else "partial",
+            # Same both-snapshots rule as the success path: without a before
+            # there is no observable diff, and zero changes under a "partial"
+            # label would claim evidence this path does not have.
+            state_evidence="unknown" if after is None or operation.before is None else "partial",
             audit={"clean": not changes, "unexplained": [], "checkpoint": "held"},
             result=None,
         )

@@ -356,12 +356,16 @@ class Mem0Backend(BaseMemoryBackend):
     def _audit_against_state(self, operation, claimed: dict[str, set[str]], after: dict | None) -> list[str]:
         """Cross-check the receipt claims against the observed state diff.
 
-        Claim direction: a row with an ADD/UPDATE claim must exist in the
-        after snapshot, a DELETE claim must not (the silent-insert class —
-        receipts over an empty write — surfaces here). Observed direction:
-        every diff change needs its receipt. Either mismatch is one
-        unexplained-drift line; with no before snapshot there is no diff to
-        audit against and the base reports ``unknown`` evidence instead.
+        Claim direction: the net expectation per id is "absent iff a delete
+        was claimed" — a DELETE receipt is always the last action on its id
+        within a batch (engine-minted ids: nothing re-adds a deleted id in
+        the same pass), so a create+delete pair nets to absent without drift,
+        while an ADD/UPDATE-only claim must exist in the after snapshot (the
+        silent-insert class — receipts over an empty write — surfaces here).
+        Observed direction: every diff change needs its receipt. Either
+        mismatch is one unexplained-drift line; with no before snapshot there
+        is no diff to audit against and the base reports ``unknown`` evidence
+        instead.
         """
         if operation.before is None or after is None:
             return []
@@ -373,8 +377,7 @@ class Mem0Backend(BaseMemoryBackend):
             if change["action"] not in claimed.get(item_id, set()):
                 unexplained.append(f"observed {change['action']} on {item_id} with no matching receipt")
         for item_id, actions in claimed.items():
-            present = item_id in after
-            if ("delete" in actions and present) or (actions != {"delete"} and not present):
+            if ("delete" in actions) == (item_id in after):
                 unexplained.append(f"receipt {'+'.join(sorted(actions))} on {item_id} is not reflected in the after snapshot")
         return unexplained
 

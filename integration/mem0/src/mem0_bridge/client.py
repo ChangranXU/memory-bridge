@@ -158,9 +158,13 @@ class Mem0PlatformClient:
         if custom_instructions and custom_instructions.strip():
             body["custom_instructions"] = custom_instructions.strip()
         response = self._request("POST", "/v3/memories/add/", json=body)
-        results = _results_of(response)
-        if results:
-            return results
+        results = response.get("results")
+        # A present results list is the sync answer (an empty one is a
+        # legitimate no-op extraction); only when it is absent does the async
+        # event_id path apply — an empty list WITH an event_id still polls,
+        # because the queued event's receipts are then the authoritative ones.
+        if isinstance(results, list) and (results or not response.get("event_id")):
+            return [_normalize_result(item) for item in results if isinstance(item, dict)]
         event_id = response.get("event_id")
         if not event_id:
             raise Mem0ApiError(502, f"mem0 add returned neither results nor event_id: {sorted(response)}")
@@ -172,11 +176,19 @@ class Mem0PlatformClient:
             event = self._request("GET", f"/v1/event/{event_id}/")
             status = event.get("status")
             if status == "SUCCEEDED":
-                payload = event.get("payload")
-                results = _results_of(payload) if isinstance(payload, dict) else []
-                if not results:
-                    results = _results_of(event)
-                return results
+                # The receipts live in the payload's results list (some event
+                # envelopes carry them top-level). An empty list is a
+                # legitimate no-op extraction; a missing or non-list results is
+                # drift — fail closed like a shapeless sync add, never coerce
+                # to "stored nothing" (the backend clears its retained batch
+                # on any non-raising add).
+                for container in (event.get("payload"), event):
+                    results = container.get("results") if isinstance(container, dict) else None
+                    if isinstance(results, list):
+                        return [_normalize_result(item) for item in results if isinstance(item, dict)]
+                raise Mem0ApiError(
+                    502, f"mem0 add event {event_id} succeeded with an unrecognizable payload: {_shape_of(event)}"
+                )
             if status == "FAILED":
                 raise Mem0ApiError(502, f"mem0 add event {event_id} failed: {event.get('error') or 'no reason given'}")
             remaining = deadline - time.monotonic()
@@ -227,7 +239,13 @@ class Mem0PlatformClient:
         )
 
     def get(self, memory_id: str) -> dict:
-        return self._request("GET", f"/v1/memories/{memory_id}/")
+        # The raw body, not _request's dict coercion: a drifted 200 must not
+        # read as an empty row — the endpoint's ownership check would then
+        # misreport drift as a plain 404.
+        body = _request_json(self._client, "GET", f"/v1/memories/{memory_id}/")
+        if not isinstance(body, dict):
+            raise Mem0ApiError(502, f"mem0 platform get returned an unrecognizable response: {_shape_of(body)}")
+        return body
 
     def update(self, memory_id: str, *, text: str | None = None, metadata: dict | None = None) -> dict:
         body = {key: value for key, value in (("text", text), ("metadata", metadata)) if value is not None}

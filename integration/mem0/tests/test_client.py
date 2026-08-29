@@ -130,6 +130,73 @@ def test_add_without_results_or_event_id_raises():
         client.add(messages=[{"role": "user", "content": "x"}], user_id="alice")
 
 
+def test_add_sync_empty_results_is_a_legitimate_no_op():
+    """The store convention: a present-but-empty results list is a real no-op
+    extraction, not drift — platform parity with the server/library stores
+    (only a MISSING or non-list results raises)."""
+    client, requests = make_client(lambda r: httpx.Response(200, json={"results": []}))
+    assert client.add(messages=[{"role": "user", "content": "x"}], user_id="alice") == []
+    assert len(requests) == 1  # no event to poll
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, {}, {"results": "not-a-list"}, "a bare string"],
+    ids=["null-payload", "payload-without-results", "non-list-results", "non-dict-payload"],
+)
+def test_add_async_succeeded_with_drifted_payload_fails_closed(payload):
+    """A SUCCEEDED event whose payload is not the results envelope is drift,
+    never "stored nothing": coercing it to [] would clear the backend's
+    retained batch and silently lose the messages — the sync path fails
+    closed for the same drift, and so must the poll terminal where every
+    async add actually finishes."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/memories/add/":
+            return httpx.Response(200, json={"event_id": "evt-4", "status": "PENDING"})
+        return httpx.Response(200, json={"id": "evt-4", "status": "SUCCEEDED", "payload": payload})
+
+    client, _ = make_client(handler)
+    with pytest.raises(Mem0ApiError) as excinfo:
+        client.add(messages=[{"role": "user", "content": "x"}], user_id="alice", poll_interval=0.0)
+    assert excinfo.value.status_code == 502
+    assert "unrecognizable" in excinfo.value.reason
+
+
+def test_add_async_succeeded_with_empty_results_returns_no_op():
+    """An empty results LIST on a SUCCEEDED event is a legitimate no-op
+    extraction — [] must flow through, not raise."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/memories/add/":
+            return httpx.Response(200, json={"event_id": "evt-5", "status": "PENDING"})
+        return httpx.Response(200, json={"id": "evt-5", "status": "SUCCEEDED", "payload": {"results": []}})
+
+    client, _ = make_client(handler)
+    assert client.add(messages=[{"role": "user", "content": "x"}], user_id="alice", poll_interval=0.0) == []
+
+
+def test_add_async_with_event_id_still_polls_despite_empty_sync_results():
+    """An empty results list WITH an event_id keeps polling: the queued
+    event's receipts are the authoritative answer there, and answering []
+    from the inline list would lose every async extraction."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/memories/add/":
+            return httpx.Response(200, json={"results": [], "event_id": "evt-6"})
+        return httpx.Response(
+            200, json={"id": "evt-6", "status": "SUCCEEDED", "payload": {"results": [{"id": "id-6", "event": "ADD"}]}}
+        )
+
+    client, requests = make_client(handler)
+    results = client.add(messages=[{"role": "user", "content": "x"}], user_id="alice", poll_interval=0.0)
+    assert [item["id"] for item in results] == ["id-6"]
+    assert [str(r.url) for r in requests] == [
+        "https://api.mem0.ai/v3/memories/add/",
+        "https://api.mem0.ai/v1/event/evt-6/",
+    ]
+
+
 def test_search_nests_user_in_filters_and_maps_results():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v3/memories/search/"
@@ -211,6 +278,15 @@ def test_update_and_delete_paths():
         "https://api.mem0.ai/v1/memories/r1/",
         "https://api.mem0.ai/v1/memories/r1/",
     ]
+
+
+def test_get_fails_closed_on_a_drifted_200():
+    """A drifted 200 must not read as an empty row: the endpoint adapter's
+    ownership check would misreport the drift as a plain 404."""
+    client, _ = make_client(lambda r: httpx.Response(200, json=["not", "a", "row"]))
+    with pytest.raises(Mem0ApiError) as excinfo:
+        client.get("r1")
+    assert excinfo.value.status_code == 502
 
 
 @pytest.mark.parametrize(

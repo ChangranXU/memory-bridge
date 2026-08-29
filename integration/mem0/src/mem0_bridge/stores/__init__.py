@@ -30,7 +30,9 @@ Shared conventions every implementation honors:
 - ``get`` on a missing id raises ``Mem0ApiError(404, ...)`` — never a null
   hit — so the endpoint contract's 404 rule holds on every surface (the OSS
   server's ``GET /memories/{id}`` answers 200 ``null`` for unknown ids; the
-  server store maps it).
+  server store maps it). A drifted non-dict 200 raises 502, never an empty
+  row: the endpoint's ownership check would misreport an empty row as that
+  same 404.
 - ``get_all`` fails closed on a drifted envelope the same way (the dump a
   coerced ``[]`` would silently truncate is diagnostic, so the error surfaces
   through the base's finalize containment as a counted backend error). It

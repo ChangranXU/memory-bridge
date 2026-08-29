@@ -135,6 +135,30 @@ def test_vacuous_extraction_posts_no_generation_op(traced_backend, capture_serve
     assert backend._counts["extraction_calls"] == 0
 
 
+def test_failed_extraction_with_a_failed_begin_snapshot_reports_unknown(traced_backend, capture_server, monkeypatch):
+    """The exception path applies the same both-snapshots rule as the success
+    path: a begin snapshot that failed while the end one succeeded leaves no
+    observable diff — zero changes under an ``unknown`` label, never a
+    zero-change ``partial`` claiming evidence this path does not have."""
+    backend = traced_backend()
+    real_snapshot = backend._snapshot_memory_state
+    calls = {"n": 0}
+
+    def flaky_begin_snapshot():
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real_snapshot()
+
+    monkeypatch.setattr(backend, "_snapshot_memory_state", flaky_begin_snapshot)
+    backend.system.extract_error = RuntimeError("extraction boom")
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "first fact"}], step=1)
+    backend._extract(2)  # contained by the base shell
+    (end,) = _ends(capture_server)
+    assert end["status"] == "failed" and end["change_count"] == 0
+    assert end["state_evidence"] == "unknown"
+    backend.finalize()
+
+
 def test_pending_inputs_follow_checkpoint_rules(traced_backend, capture_server):
     backend = traced_backend()
     backend.set_task("task")

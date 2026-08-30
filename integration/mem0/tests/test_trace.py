@@ -14,6 +14,7 @@ import httpx
 from mem0_bridge.backend import Mem0Backend
 from mem0_bridge.client import Mem0ApiError
 from mem0_bridge.config import Mem0Config
+from mem0_bridge.stores import SERVER_LISTING_CAP
 
 from shared_bridge.annotate import text_sha256
 
@@ -317,6 +318,47 @@ def test_snapshot_failure_degrades_to_unknown_evidence(traced_backend, capture_s
     backend.finalize()
 
 
+def test_full_page_snapshot_degrades_to_unknown_never_false_drift(
+    traced_backend, capture_server, fake_client, monkeypatch
+):
+    """The OSS server answers get-all as ONE clamped page: once the user scope
+    reaches the cap, the snapshot cannot see every row, and an honest receipt
+    for a row outside the window must not be accused of drift. A full page
+    blinds the audit — unknown evidence, no drift lines — instead of the
+    false 'receipt create ... not reflected' partial the clamped snapshot
+    used to post."""
+    for name, value in (
+        ("EMBEDDING_MODEL", "text-embedding-3-small"),
+        ("EMBEDDING_API_KEY", "emb-key"),
+        ("EMBEDDING_BASE_URL", "https://emb.invalid"),
+        ("EMBEDDING_DIMENSIONS", "1536"),
+    ):
+        monkeypatch.setenv(name, value)
+    for i in range(SERVER_LISTING_CAP):
+        fake_client.memories[f"s{i}"] = {
+            "id": f"s{i}",
+            "memory": f"seeded fact {i}",
+            "user_id": "minisweagent",
+            "run_id": "run-x",
+            "score": 0.9,
+            "metadata": {},
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+    backend = traced_backend(mode="server", server_url="http://127.0.0.1:8890")
+    backend.set_task("task")
+    backend.record([{"role": "user", "content": "hello"}], step=1)
+    backend._extract(2)  # the add inserts one more row — outside the clamped page
+    (change,) = _changes(capture_server)
+    assert change["action"] == "create" and change["evidence"] == "native_receipt"
+    (end,) = _ends(capture_server)
+    assert end["status"] == "completed" and end["change_count"] == 1
+    assert end["state_evidence"] == "unknown"
+    assert "unexplained" not in end["extensions"]["mem0"]
+    assert backend._counts["memories_added"] == 1
+    backend.finalize()
+
+
 def test_receipts_the_state_does_not_show_are_flagged_drift(traced_backend, capture_server, fake_client, monkeypatch):
     """The silent-insert class (documented for the OSS surfaces: ADD
     receipts over an empty write): a completed generation whose receipts
@@ -460,6 +502,25 @@ def test_search_end_returns_platform_hit_refs(traced_backend, capture_server, fa
     # The hosted platform returns a top-k pool, so the raw hit count is only
     # a floor on the true match total — the default precision.
     assert end_payload["matched_count"] == {"value": 1, "precision": "lower_bound"}
+    backend.finalize()
+
+
+def test_search_row_provenance_falls_back_to_session_id(traced_backend, capture_server, fake_client):
+    """The platform's get-all rows carry the add-time run id under
+    ``session_id`` (the split _final_dump reads both for). If the search
+    surface follows that naming, provenance must survive the same way: the
+    origin falls back to session_id instead of silently reading none — a
+    dead provenance signal would zero the cross-episode recall share with no
+    counter moving."""
+    _seed_memory(fake_client)
+    fake_client.memories["m1"]["run_id"] = None
+    fake_client.memories["m1"]["session_id"] = f"xarray-3001-{'a' * 32}"
+    backend = traced_backend()
+    backend.set_task("fix the bug")
+    recall = backend.recall_context(planned_step=1)
+    assert recall is not None
+    assert recall["origins"] == [f"xarray-3001-{'a' * 32}"]
+    assert "(from earlier episode xarray-3001)" in recall["content"]
     backend.finalize()
 
 

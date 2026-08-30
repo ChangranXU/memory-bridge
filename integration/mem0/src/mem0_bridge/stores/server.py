@@ -21,10 +21,7 @@ handler) — this store maps the null to the protocol's 404 convention.
 import httpx
 
 from mem0_bridge.client import Mem0ApiError, _request_json, _results_of, _shape_of
-from mem0_bridge.stores import Receipt
-
-# The server clamps get-all top_k at ALL_MEMORIES_LIMIT (server/main.py).
-_ALL_MEMORIES_LIMIT = 1000
+from mem0_bridge.stores import SERVER_LISTING_CAP, Receipt
 
 
 class ServerStore:
@@ -132,9 +129,10 @@ class ServerStore:
 
     def get_all(self, *, user_id: str, limit: int) -> list[dict]:
         # Query-param scoped get-all; the entity filter is hard-required by the
-        # engine and the server caps top_k at 1000 — clamp explicitly.
+        # engine and the server caps top_k at its hard listing ceiling — clamp
+        # explicitly.
         response = self._request(
-            "GET", "/memories", params={"user_id": user_id, "top_k": max(1, min(limit, _ALL_MEMORIES_LIMIT))}
+            "GET", "/memories", params={"user_id": user_id, "top_k": max(1, min(limit, SERVER_LISTING_CAP))}
         )
         results = response.get("results") if isinstance(response, dict) else None
         if not isinstance(results, list):

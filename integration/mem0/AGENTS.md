@@ -157,8 +157,14 @@ Platform surface (verified against the v3 API reference + recorded runs):
   serves.
 
 Generation audit (all modes, traced runs only): the backend snapshots the
-store's full user scope (`get_all`, the final dump's ceiling) before and
-after every extraction tick. A completed generation's receipts are
+store's full user scope (`get_all` — the final dump's ceiling, except server
+mode, whose one clamped page caps the walk at `SERVER_LISTING_CAP`) before and
+after every extraction tick. A full page means the scope may not have
+exhausted, and an incomplete snapshot can verify neither presence nor absence:
+the audit degrades to `unknown` evidence for that generation rather than
+accuse honest receipts of drift (the false-drift class a >1000-memory server
+run root would otherwise post every tick). A completed generation's receipts
+are
 cross-checked against the observed before/after diff (a disagreement — the
 silent-insert class, or a mutation no receipt claims — downgrades the end's
 `state_evidence` to `partial` with the drift lines in the audit), and a

@@ -45,6 +45,12 @@ Shared conventions every implementation honors:
 
 from typing import Protocol, TypedDict
 
+# The OSS server's hard get-all cap (server/main.py: ALL_MEMORIES_LIMIT): it
+# answers one clamped page no matter the requested limit, so callers that must
+# know whether the walk exhausted the scope (the generation audit's snapshot)
+# ask for exactly this ceiling and read a full page as "possibly truncated".
+SERVER_LISTING_CAP = 1000
+
 
 class Receipt(TypedDict):
     """One normalized add receipt (post client-side flattening)."""

@@ -46,7 +46,7 @@ from shared_bridge.backend import BaseMemoryBackend, _BackendUnavailable, _confi
 
 from mem0_bridge.config import Mem0Config
 from mem0_bridge.prompts import RECALL_LEAD_IN, RECALL_SECTION_TITLE, RECALL_TITLE
-from mem0_bridge.stores import Mem0Store, open_store
+from mem0_bridge.stores import SERVER_LISTING_CAP, Mem0Store, open_store
 
 logger = logging.getLogger("mem0_bridge.backend")
 
@@ -276,7 +276,7 @@ class Mem0Backend(BaseMemoryBackend):
 
     def _snapshot_memory_state(self) -> dict | None:
         """The store's full user scope as the generation audit's observed
-        state, or None when the listing fails (the base then reports
+        state, or None when unavailable (the base then reports
         ``unknown`` evidence — a snapshot never raises into the native path).
 
         No mode's get-all filters server-side by anything but ``user_id``,
@@ -289,14 +289,30 @@ class Mem0Backend(BaseMemoryBackend):
         state. Untraced runs never pay it — the base snapshots only around
         a live trace operation. Id-less rows are uncitable (the
         ``_memory_ref`` rule) and stay out of the diff.
+
+        The walk asks the mode's real ceiling (the OSS server hard-caps its
+        one page at SERVER_LISTING_CAP no matter the requested limit), so a
+        FULL page means the scope may not have exhausted: an incomplete
+        snapshot can verify neither presence nor absence (the clamped window
+        itself shifts as rows land beyond it), and the audit must degrade to
+        ``unknown`` — flagging drift against it would accuse honest receipts.
         """
         store = self._store
         if store is None:
             return None
+        limit = SERVER_LISTING_CAP if self.config.mode == "server" else _FINAL_DUMP_LIMIT
         try:
-            rows = store.get_all(user_id=self.effective_user_id(), limit=_FINAL_DUMP_LIMIT)
+            rows = store.get_all(user_id=self.effective_user_id(), limit=limit)
         except Exception:
             logger.warning("memory audit snapshot failed", exc_info=True)
+            return None
+        if len(rows) >= limit:
+            logger.info(
+                "memory audit snapshot hit the %s-mode listing ceiling (%d rows); "
+                "generation evidence degrades to unknown",
+                self.config.mode,
+                len(rows),
+            )
             return None
         return {str(row["id"]): row for row in rows if isinstance(row, dict) and row.get("id")}
 
@@ -526,10 +542,14 @@ class Mem0Backend(BaseMemoryBackend):
 
     def _hit_origin(self, hit: dict) -> str | None:
         # The engine echoes the add-time run_id (the backend's per-episode
-        # session id) on every search row — the provenance signal.
+        # session id) on every search row — the provenance signal. The
+        # platform's get-all surface carries the same value under session_id
+        # (the split _final_dump reads both for); read both keys here too, so
+        # a surface renaming the field cannot silently kill provenance (no
+        # counter moves — cross-episode recall share would just read zero).
         if not isinstance(hit, dict):
             return None
-        origin = hit.get("run_id")
+        origin = hit.get("run_id") or hit.get("session_id")
         return origin if isinstance(origin, str) and origin else None
 
     def _hit_score(self, hit: dict) -> float | None:

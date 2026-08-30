@@ -12,6 +12,7 @@ URLs never carry a bearer trajectory ID.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
 import math
@@ -65,6 +66,8 @@ def sanitize_url(url: str) -> str:
     except ValueError:
         return "<unparseable-url>"
     netloc = parts.hostname or ""
+    if ":" in netloc:
+        netloc = f"[{netloc}]"  # urlsplit strips an IPv6 literal's brackets
     if port is not None:
         netloc = f"{netloc}:{port}"
     path = re.sub(
@@ -286,7 +289,15 @@ class Annotator:
             logger.debug("annotation attempt got HTTP %s from %s", e.code, sanitize_url(url))
             e.close()  # release the socket; an unread error body leaks it
             return PostResult(ok=False, status=e.code)
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.IncompleteRead, http.client.BadStatusLine) as e:
+            # IncompleteRead/BadStatusLine cover the truncated/dropped-response
+            # classes urlopen lets escape raw (response.read() runs in the
+            # caller; RemoteDisconnected already rides OSError via
+            # ConnectionResetError) — connection failures like the rest of the
+            # tuple, so they take the configured retries instead of falling to
+            # the blanket catch with zero retries and a full breaker strike.
+            # Deterministic HTTPException subclasses (e.g. InvalidURL) stay in
+            # the blanket catch: retrying them would just replay the failure.
             logger.debug("annotation attempt failed (%s) for %s", type(e).__name__, sanitize_url(url))
             return PostResult(ok=False)
         except ValueError as e:

@@ -509,7 +509,9 @@ class BaseMemoryBackend(ABC):
                 continue
             # Defense in depth: the transient recall marker is appended directly
             # to agent.messages and bypasses add_messages; never record it.
-            if message.get("extra", {}).get("transient_recall"):
+            # (`or {}`: an explicit extra=None is no extras, never an
+            # AttributeError escaping the per-message containment below.)
+            if (message.get("extra") or {}).get("transient_recall"):
                 continue
             try:
                 text = _truncate(self._message_text(message), self.config.max_message_chars)
@@ -564,7 +566,7 @@ class BaseMemoryBackend(ABC):
                     parts.append(str(block))
         else:
             parts.append(str(content))
-        actions = message.get("extra", {}).get("actions")
+        actions = (message.get("extra") or {}).get("actions")
         if actions:
             parts.append("Actions:\n" + json.dumps(actions, ensure_ascii=False, default=str))
         return "\n".join(part for part in parts if part)
@@ -1865,4 +1867,10 @@ class BaseMemoryBackend(ABC):
             "events": self._events,
             "final_memories": final_memories if final_memories is not None else [],
         }
-        (output_dir / "memory.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        # Atomic via a same-directory replace: a SIGKILL mid-write must not
+        # leave a truncated memory.json — the episode's primary memory
+        # artifact.
+        path = output_dir / "memory.json"
+        tmp = output_dir / ".memory.json.tmp"
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        tmp.replace(path)

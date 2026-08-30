@@ -83,7 +83,7 @@ class CUREMemorySystem:
             self.store.update_memory(memory)
 
         for memory in result.candidates:
-            self._upsert_memory(memory)
+            result.persisted.append(self._upsert_memory(memory))
 
         if messages:
             self._last_extracted_message_id_by_session[self.current_session_id] = max(

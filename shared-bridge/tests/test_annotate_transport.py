@@ -69,6 +69,52 @@ def test_http_error_returns_status_and_closes_the_body():
     assert fp.closed  # the error body is not left leaking the socket
 
 
+def test_truncated_response_takes_the_connection_retries():
+    """A dropped-connection truncation is a connection-class failure:
+    http.client.IncompleteRead escapes urlopen RAW (response.read() runs in
+    the caller), so without HTTPException in the retryable tuple it would fall
+    to the blanket catch — zero retries and a full breaker strike."""
+    import http.client
+
+    class _Ok:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"accepted": 1}'
+
+    attempts = 0
+
+    def flaky(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise http.client.IncompleteRead(b"")
+        return _Ok()
+
+    annotator = Annotator(timeout=1.0, retries=1, max_consecutive_errors=3)
+    with mock.patch("urllib.request.urlopen", flaky):
+        result = annotator.post("http://h/MAIN/trajectories/abc/annotate", [])
+    assert attempts == 2  # one retry, then the success
+    assert result.ok is True and result.status == 202
+    assert annotator._consecutive_failures == 0  # the success reset the count
+
+
+def test_sanitize_url_keeps_ipv6_brackets():
+    """urlsplit strips an IPv6 literal's brackets on .hostname; the sanitized
+    form must restore them or the artifact URL is malformed."""
+    from shared_bridge.annotate import sanitize_url
+
+    sanitized = sanitize_url("http://[::1]:8080/MAIN/trajectories/abc/annotate")
+    assert sanitized.startswith("http://[::1]:8080/MAIN/trajectories/")
+    assert "abc" not in sanitized  # the bearer trajectory ID stays hashed
+
+
 def test_breaker_callback_fires_once_at_the_open_transition():
     """The on_breaker callback is the bridge's memory.json record that the
     transport died: it fires exactly once, at the transition — not on the

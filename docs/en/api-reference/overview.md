@@ -100,6 +100,6 @@ class MyEndpoint(MemoryEndpoint):
 | `mem0_bridge.endpoint.Mem0Endpoint` | mem0 store (platform / server / library mode) |
 | `tencentdb_bridge.endpoint.TencentDBEndpoint` | MemoryCore gateway REST client |
 
-Individual adapters narrow the uniform contract where their engine requires it — for example, the tencentdb adapter rejects `infer: false` and any metadata-bearing update, and the CURE adapter requires `text` on update (see [Integrations](../integrations/overview.md)).
+Individual adapters narrow the uniform contract where their engine requires it — for example, the tencentdb adapter rejects `infer: false`, metadata-bearing adds, and any metadata-bearing update, and the CURE adapter rejects metadata-bearing updates and metadata on verbatim (`infer: false`) adds (see [Integrations](../integrations/overview.md)).
 
 All adapters wrap the same machinery their backends use, so the endpoint and the benchmark-time `_search` share semantics.

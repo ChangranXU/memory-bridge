@@ -73,3 +73,11 @@ class ExtractionResult:
     rejected: List[Rejection] = field(default_factory=list)
     deleted: List[Memory] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    # The upsert's effective row per candidate, populated by the system's
+    # write path (extract_runtime_memories): the newly saved row, or the
+    # EXISTING row on the identical-content no-op — so a caller can report the
+    # persisted id even when the candidate itself was never written. Stays
+    # empty when the extraction errored (checkpoint held, nothing upserted).
+    # The candidates list itself keeps the decision's own objects: the trace
+    # audit keys on their id=None no-op shape.
+    persisted: List[Memory] = field(default_factory=list)

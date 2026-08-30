@@ -121,8 +121,6 @@ class ChatGPTMemoryDecisionClient:
                 with urllib.request.urlopen(http_request, timeout=self.timeout) as response:
                     body = response.read().decode("utf-8", "replace")
                 parsed = json.loads(body)
-                self.last_error = None
-                break
             except urllib.error.HTTPError as error:
                 self.last_error = f"http_{error.code}"
                 if error.code < 500 or attempt >= self.max_retries:
@@ -136,16 +134,31 @@ class ChatGPTMemoryDecisionClient:
                 self.last_error = error.__class__.__name__
                 if attempt >= self.max_retries:
                     return ""
+            else:
+                if isinstance(parsed, dict):
+                    self.last_error = None
+                    break
+                # A 200 carrying a non-object body ("null", a bare list, a
+                # number) is a failed response in the decode class: retried
+                # like one, and it must never reach the choices read — a None
+                # would read as "no error", so the extraction checkpoint would
+                # silently advance past the unprocessed batch.
+                self.last_error = "non_dict_body"
+                if attempt >= self.max_retries:
+                    return ""
             time.sleep(0.5 * (attempt + 1))
 
-        if parsed is None:
-            return ""
-
         choices = parsed.get("choices", [])
-        if not choices:
+        # A non-empty non-list "choices" (or a non-dict first item) is the
+        # same malformed-envelope class one level down: guard it instead of
+        # raising an uncaught KeyError/AttributeError past the error taxonomy.
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             self.last_error = "missing_choices"
             return ""
         message = choices[0].get("message", {})
+        if not isinstance(message, dict):
+            self.last_error = "missing_content"
+            return ""
         content = message.get("content", "")
         if isinstance(content, str):
             text = content.strip()

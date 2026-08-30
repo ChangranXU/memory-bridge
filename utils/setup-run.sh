@@ -23,6 +23,13 @@ esac
 
 RUN_UID="${NAME}-$(date -u +%Y%m%d-%H%M%Sz)"
 RUN_ROOT_NEW="$REPO_ROOT/output/$RUN_UID"
+# The timestamp resolves to one second: two invocations with the same NAME
+# inside one second must not silently share a run root (rule 4's fresh-root
+# invariant) — plain mkdir fails on the existing directory.
+mkdir -p "$REPO_ROOT/output"
+if ! mkdir "$RUN_ROOT_NEW"; then
+  die "run root already exists: $RUN_ROOT_NEW (same NAME within one second — pick another NAME)"
+fi
 mkdir -p "$RUN_ROOT_NEW/runs/mini-swe-agent" "$RUN_ROOT_NEW/local-eval"
 
 if ! read_instance_ids "$IDS_FILE" > "$RUN_ROOT_NEW/instance-ids.txt" || [ ! -s "$RUN_ROOT_NEW/instance-ids.txt" ]; then

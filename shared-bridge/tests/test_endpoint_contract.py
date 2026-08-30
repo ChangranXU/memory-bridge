@@ -173,6 +173,41 @@ def test_http_error_shapes(base_url):
     assert status == 404
 
 
+def test_http_rejects_negative_content_length(base_url):
+    """Content-Length: -1 means "read to EOF" for rfile.read — a held-open
+    socket would block the single serving thread forever. Rejected with 400
+    before any read."""
+    import http.client
+
+    port = int(base_url.rsplit(":", 1)[1])
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("POST", "/v1/memories/search/")
+    conn.putheader("Content-Length", "-1")
+    conn.endheaders(b"{}")
+    response = conn.getresponse()
+    assert response.status == 400
+    response.read()
+    conn.close()
+
+
+def test_http_memory_id_is_percent_decoded(base_url):
+    """The {id} segment is URL-decoded before dispatch: %31 is "1", and an
+    encoded slash decodes to a path separator — not an id segment (404)."""
+    status, body = _request(
+        base_url,
+        "POST",
+        "/v1/memories/",
+        {"messages": [{"role": "user", "content": "encoded id test"}], "user_id": "alice"},
+    )
+    assert status == 200
+    (memory_id,) = body["memory_ids"]
+    assert memory_id == "1"
+    status, body = _request(base_url, "PUT", "/v1/memories/%31", {"text": "encoded id updated"})
+    assert status == 200 and body["memory"]["content"] == "encoded id updated"
+    status, _ = _request(base_url, "DELETE", "/v1/memories/1%2F2")
+    assert status == 404
+
+
 def test_serve_in_thread_reraises_the_real_startup_error(base_url):
     # The port is already bound by the base_url fixture server: the underlying
     # OSError must surface immediately, not a 5s wait and a generic message.

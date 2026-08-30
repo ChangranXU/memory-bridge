@@ -15,8 +15,9 @@
   publishing `127.0.0.1:8420`, data volume `<run-root>/tdai/data`). Port 8420
   is a per-machine single-arm lock: two tencentdb run roots cannot run
   concurrently — enforced at the process level by the machine-wide arm claim
-  (`${TMPDIR:-/tmp}/tdai-arm-claim`, a directory lock under the per-user
-  temp dir — Docker Desktop's daemon is per-user, so one lock per user
+  (`${TMPDIR:-/tmp}/memory-bridge-arm-claim`, a directory lock under the per-user
+  temp dir shared by EVERY integration's arm — they all regenerate the one
+  recorder `.env` per run, and Docker Desktop's daemon is per-user, so one lock per user
   covers every checkout of this bundle on the machine; acquisition is the
   atomic `mkdir(2)` of the claim dir with the driver pid inside, so two
   drivers started together can never both hold it; a live holder fails the
@@ -209,7 +210,9 @@
   episodes.
 - **Endpoint adapter** (`tencentdb_bridge.endpoint`): `add` with
   `infer=false` answers 400 (there is no verbatim insert — no `atomic/add`
-  route exists; `conversation/add` always feeds extraction); a fresh
+  route exists; `conversation/add` always feeds extraction), and an add
+  carrying `metadata` answers 400 too (the conversation schema has no
+  metadata field — a silent drop would claim a write not fully made); a fresh
   session id per add (the warmup threshold starts at 1, so every add
   triggers its L1 task) — the one deliberate deviation from the contract's
   byte-for-byte session echo: the response carries the minted session id,

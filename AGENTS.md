@@ -79,7 +79,11 @@ set is silently disabled upstream, so the driver refuses it). The mem0
 server mode and the tencentdb arm need Docker running — tencentdb pulls
 `agentmemory/memory-core:1.0.1-beta.1`, mem0 server builds its stack from
 the vendored clone (127.0.0.1:8890 is a per-machine single-arm lock, as is
-tencentdb's 8420). Prerequisites: `uv` on PATH; Docker
+tencentdb's 8420). Beyond the ports, one machine-wide claim
+(`${TMPDIR:-/tmp}/memory-bridge-arm-claim`, per user) serializes ALL memory
+arms — every arm regenerates the recorder's single `.env` at profile time
+and every per-instance proxy boot re-reads it, so concurrent arms would swap
+each other's roster mid-run. Prerequisites: `uv` on PATH; Docker
 installed and running (`docker info` succeeds); `uv sync` has created the
 shared env.
 

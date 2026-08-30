@@ -200,6 +200,23 @@ def test_add_infer_false_answers_400(endpoint):
     assert "verbatim" in excinfo.value.reason
 
 
+def test_add_with_metadata_answers_400(endpoint, client):
+    # The conversation schema has no metadata field: accepting the add would
+    # silently drop it — the update path's "never claim a write not fully
+    # made" rationale, applied to the add (rejected BEFORE any gateway write).
+    with pytest.raises(MemoryEndpointError) as excinfo:
+        endpoint.add(
+            AddRequest(
+                messages=[Message(role="user", content="pytest x fails on merge")],
+                user_id="user-1",
+                metadata={"source": "pytest"},
+            )
+        )
+    assert excinfo.value.status_code == 400
+    assert "metadata" in excinfo.value.reason
+    assert client.add_calls == []
+
+
 def test_add_gateway_error_maps_500(endpoint, client):
     client.add_error = TencentDBApiError(4291, "quota exceeded")
     with pytest.raises(MemoryEndpointError) as excinfo:

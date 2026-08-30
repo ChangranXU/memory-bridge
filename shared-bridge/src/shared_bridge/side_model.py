@@ -119,7 +119,7 @@ def _call(cfg: SideModelConfig, call: StructuredCall[T]) -> StructuredResult[T]:
         return StructuredResult(error="response_not_json")
 
     choices = body.get("choices") if isinstance(body, dict) else None
-    if not choices:
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return StructuredResult(error="missing_choices")
     choice = choices[0]
     if choice.get("finish_reason") == "length":

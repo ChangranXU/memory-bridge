@@ -581,7 +581,7 @@ class TencentDBBackend(BaseMemoryBackend):
             # pending reads (a FormatError emits no observation at all).
             self._pending_reads = {}
             self._pending_searches = {}
-            actions = message.get("extra", {}).get("actions")
+            actions = (message.get("extra") or {}).get("actions")
             if not isinstance(actions, list):
                 return
             for action in actions:

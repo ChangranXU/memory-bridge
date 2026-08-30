@@ -167,6 +167,18 @@ class CureMemoryBackend(BaseMemoryBackend):
             except ImportError:
                 if inserted:
                     sys.path.remove(path_str)
+                # A half-broken candidate (the package imports, a submodule
+                # raises) leaves its package object cached in sys.modules: the
+                # next candidate's import would resolve submodules against the
+                # CACHED package's __path__ — this candidate's tree — and the
+                # documented fall-through would never actually try the next
+                # tree. Evict the partial modules so it does.
+                for name in [
+                    name
+                    for name in sys.modules
+                    if name == "cure_memory" or name.startswith("cure_memory.")
+                ]:
+                    del sys.modules[name]
                 continue
             origin = Path(cure_memory.system.__file__).resolve()
             if not origin.is_relative_to(resolved_candidate):

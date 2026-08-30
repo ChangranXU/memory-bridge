@@ -40,7 +40,7 @@ Replace the text and/or metadata of an existing memory. The write is synchronous
 | Adapter | Update support |
 |---|---|
 | mem0 | `text` and/or `metadata`. |
-| CURE | `text` required — no standalone metadata; any request without `text` is rejected with `400`. |
+| CURE | `text` alone — no standalone metadata; any metadata-bearing update (including `text` + `metadata`) is rejected with `400`. |
 | tencentdb | `text` alone — any metadata-bearing update (including `text` + `metadata`) is rejected with `400`. |
 
 ## Response
@@ -97,6 +97,6 @@ print(response.json())
 
 | Status | Reason |
 |---|---|
-| `400` | Empty `text` field, invalid JSON body, adapter-level rejections (mem0: neither `text` nor `metadata` provided; CURE: `text` absent; tencentdb: any `metadata` present). |
+| `400` | Empty `text` field, invalid JSON body, adapter-level rejections (mem0: neither `text` nor `metadata` provided; CURE: `text` absent or any `metadata` present; tencentdb: any `metadata` present). |
 | `404` | Unknown memory ID. |
 | `500` | Integration-level update failure. |

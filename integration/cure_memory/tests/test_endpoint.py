@@ -88,6 +88,42 @@ def test_add_with_infer_extraction_failure_is_a_500(endpoint_and_client):
     assert endpoint.search(SearchRequest(query="rolling", user_id="alice")).data == []
 
 
+def test_add_with_infer_dedupe_reports_the_existing_row(endpoint_and_client):
+    """An infer=true add whose candidate dedupes (identical-content no-op)
+    writes nothing new — and reports the EXISTING row's id, never an empty id
+    list for a persisted memory (the verbatim retry path's convention)."""
+    endpoint, client = endpoint_and_client
+    decision = {"candidates": [approved_candidate(1, "k1", "extracted fact")], "deletions": [], "rejections": []}
+    client.queue.append(decision)
+    first = _add(endpoint, ["please remember the extracted fact"], infer=True)
+    client.queue.append(decision)
+    retry = _add(endpoint, ["please remember the extracted fact"], infer=True)
+    assert first.memory_ids and retry.memory_ids == first.memory_ids
+    rows = endpoint._system.store.list_memories("alice", review_status=None)
+    assert len(rows) == 1  # the retry wrote nothing new
+    hits = endpoint.search(SearchRequest(query="extracted", user_id="alice")).data
+    assert [hit.id for hit in hits] == retry.memory_ids
+
+
+def test_verbatim_add_with_metadata_answers_400(endpoint_and_client):
+    """Verbatim rows carry no arbitrary metadata: silently dropping the
+    request's metadata would claim a write not fully made (the update path's
+    ground). infer=true honors metadata via the recorded messages."""
+    endpoint, _ = endpoint_and_client
+    with pytest.raises(MemoryEndpointError) as excinfo:
+        endpoint.add(
+            AddRequest(
+                messages=[{"role": "user", "content": "remember the rolling fix"}],
+                user_id="alice",
+                session_id="s1",
+                infer=False,
+                metadata={"source": "pytest"},
+            )
+        )
+    assert excinfo.value.status_code == 400
+    assert endpoint._system.store.list_memories("alice", review_status=None) == []
+
+
 def test_search_top_k_caps_the_results(endpoint_and_client):
     endpoint, _ = endpoint_and_client
     _add(endpoint, ["fix alpha", "fix beta", "fix gamma"])
@@ -122,6 +158,19 @@ def test_update_and_delete_unknown_or_invalid_ids(endpoint_and_client):
     with pytest.raises(MemoryEndpointError) as no_text:
         endpoint.update(memory_id, UpdateRequest(), user_id="alice")
     assert no_text.value.status_code == 400
+
+
+def test_update_with_metadata_answers_400(endpoint_and_client):
+    """CURE rows carry no arbitrary metadata: a text+metadata update applied
+    partially would silently drop the metadata half — 400 like the
+    metadata-only case, and nothing is applied."""
+    endpoint, _ = endpoint_and_client
+    (memory_id,) = _add(endpoint, ["old text"]).memory_ids
+    with pytest.raises(MemoryEndpointError) as excinfo:
+        endpoint.update(memory_id, UpdateRequest(text="new text", metadata={"k": "v"}), user_id="alice")
+    assert excinfo.value.status_code == 400
+    assert endpoint.search(SearchRequest(query="new", user_id="alice")).data == []
+    assert endpoint.search(SearchRequest(query="old", user_id="alice")).data[0].id == memory_id
 
 
 def test_delete_removes_the_row_from_search(endpoint_and_client):

@@ -45,9 +45,10 @@ never diverge. Per mode:
 - `server` — a per-run self-hosted OSS server stack the driver manages: TWO
   containers on one bridge network (`pgvector/pgvector:0.8.6-pg17`, no published
   port, plus the API server built at runtime from `vendor/mem0/` with the
-  engine pinned `mem0ai==2.0.19`), published at `127.0.0.1:8890` — a
-  machine-wide single-arm claim (`${TMPDIR:-/tmp}/mem0-arm-claim`) makes a
-  concurrent server arm die loudly. Requires Docker running and the full
+  engine pinned `mem0ai==2.0.19`), published at `127.0.0.1:8890` — the
+  machine-wide single-arm claim (`${TMPDIR:-/tmp}/memory-bridge-arm-claim`,
+  shared by every integration's arm because they all regenerate the ONE
+  recorder `.env`) makes a concurrent arm die loudly. Requires Docker running and the full
   `EMBEDDING_*` quartet in the bundle-root `.env` (fail-closed: the OSS
   engine embeds on every add and every search, no lexical fallback). The
   store lives on run-root volumes under `<run-root>/mem0-server/` (pg data +

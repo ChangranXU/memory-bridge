@@ -40,7 +40,7 @@ description: 更新已有记忆的文本或元数据。
 | 适配器 | 更新支持 |
 |---|---|
 | mem0 | `text` 和/或 `metadata`。 |
-| CURE | 必须提供 `text`——不存储独立元数据；缺少 `text` 的请求以 `400` 拒绝。 |
+| CURE | 仅接受单独的 `text`——不存储独立元数据；任何携带 `metadata` 的更新（包括 `text` + `metadata`）均以 `400` 拒绝。 |
 | tencentdb | 仅接受单独的 `text`——任何携带 `metadata` 的更新（包括 `text` + `metadata`）均以 `400` 拒绝。 |
 
 ## 响应
@@ -97,6 +97,6 @@ print(response.json())
 
 | 状态码 | 原因 |
 |---|---|
-| `400` | 空的 `text` 字段，无效的 JSON body，适配器层面的拒绝（mem0：`text` 与 `metadata` 均未提供；CURE：缺少 `text`；tencentdb：携带任何 `metadata`）。 |
+| `400` | 空的 `text` 字段，无效的 JSON body，适配器层面的拒绝（mem0：`text` 与 `metadata` 均未提供；CURE：缺少 `text` 或携带任何 `metadata`；tencentdb：携带任何 `metadata`）。 |
 | `404` | 未知的记忆 ID。 |
 | `500` | 集成级别的更新故障。 |

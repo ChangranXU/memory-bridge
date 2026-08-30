@@ -54,20 +54,34 @@ def main() -> int:
         if not pred_path.exists():
             missing.append(instance_id)
             continue
-        pred = json.loads(pred_path.read_text()).get(instance_id)
+        try:
+            payload = json.loads(pred_path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            raise SystemExit(f"unreadable preds.json for {instance_id}: {e}")
+        if not isinstance(payload, dict):
+            raise SystemExit(f"preds.json for {instance_id} is not a JSON object")
+        pred = payload.get(instance_id)
         if pred is None:
             missing.append(instance_id)
             continue
+        if not isinstance(pred, dict):
+            raise SystemExit(f"preds.json entry for {instance_id} is not a JSON object")
         patch = pred.get("model_patch")
         if not isinstance(patch, str) or not patch.strip():
             empty.append(instance_id)
             continue
+        model = pred.get("model_name_or_path")
+        if not isinstance(model, str) or not model.strip():
+            # A null/missing model name would otherwise pass the single-model
+            # gate uniformly (models == {None}) and surface inside the Docker
+            # harness — fail here, at the gate.
+            raise SystemExit(f"preds.json for {instance_id} carries no usable model_name_or_path")
         combined[instance_id] = {
             "instance_id": instance_id,
-            "model_patch": pred["model_patch"],
-            "model_name_or_path": pred["model_name_or_path"],
+            "model_patch": patch,
+            "model_name_or_path": model,
         }
-        models.add(pred["model_name_or_path"])
+        models.add(model)
 
     if missing:
         raise SystemExit("missing predictions for: " + ", ".join(missing))

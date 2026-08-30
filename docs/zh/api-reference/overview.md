@@ -100,6 +100,6 @@ class MyEndpoint(MemoryEndpoint):
 | `mem0_bridge.endpoint.Mem0Endpoint` | mem0 store（platform / server / library 模式） |
 | `tencentdb_bridge.endpoint.TencentDBEndpoint` | MemoryCore 网关 REST 客户端 |
 
-个别适配器会在其引擎要求时收窄统一契约——例如，tencentdb 适配器拒绝 `infer: false` 以及任何携带 `metadata` 的更新，CURE 适配器要求更新时必须提供 `text`（参见[集成概览](../integrations/overview.md)）。
+个别适配器会在其引擎要求时收窄统一契约——例如，tencentdb 适配器拒绝 `infer: false`、携带 `metadata` 的 add，以及任何携带 `metadata` 的更新；CURE 适配器拒绝携带 `metadata` 的更新以及逐字（`infer: false`）add 上的 `metadata`（参见[集成概览](../integrations/overview.md)）。
 
 所有适配器包装了与其后端相同的机制，因此端点与基准运行时的 `_search` 共享语义。

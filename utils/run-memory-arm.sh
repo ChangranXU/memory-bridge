@@ -257,7 +257,10 @@ resolve_recorder() {
 # exclusion is per value name, so the mixed form stays legal.
 write_recorder_env() {
   umask 077
-  cat > "$RECORDER/.env" <<EOF
+  # The die is load-bearing: this script runs under set -u only, so a failed
+  # write (unwritable checkout, full disk) would otherwise go unnoticed and
+  # every per-instance proxy would boot from the PREVIOUS arm's stale roster.
+  cat > "$RECORDER/.env" <<EOF || die "failed to regenerate the recorder .env at $RECORDER/.env"
 ROLE1="MAIN"
 ROLE1_MODEL="$MODEL"
 ROLE1_API_KEY="$API_KEY"
@@ -341,6 +344,82 @@ export_query_lane() {
   export MEMORY_QUERY_MODEL_URL
   export MEMORY_QUERY_MODEL="$QUERY_MODEL"
   export MEMORY_QUERY_API_KEY="trajectory-proxy"
+}
+
+# ---- Machine-wide single memory-arm claim ----
+# One claim serializes ALL memory arms on this machine (per user). The shared
+# resource is the ONE recorder .env: every arm regenerates it at profile time
+# and every per-instance proxy boot re-reads it, so two arms — any
+# integrations — would swap each other's role roster mid-arm (the fixed proxy
+# port 4000 fails the second arm only per-instance, AFTER its profile already
+# clobbered the file; the container arms' fixed ports 8420/8890 forced the
+# same serialization before). The claim lives under the per-user temp dir,
+# NOT the checkout: Docker Desktop's daemon is per-user, so one lock per user
+# covers every checkout of this bundle on the machine (a checkout-local claim
+# would let a second checkout sweep a live arm's containers). Acquisition is
+# the atomic mkdir(2) of the claim dir — a check-then-write file claim would
+# let two drivers started together both pass and sweep each other's
+# containers. The holder's pid lands in the dir a beat after its mkdir, so a
+# claim with no readable pid yet is a holder mid-acquire: retry briefly,
+# never take over (a holder dying exactly there leaves it forever; the
+# bounded wait then breaks the tie). A claim naming a dead pid is stale (a
+# SIGKILL'd driver): remove it and retry — re-acquisition is still the atomic
+# mkdir, so exactly one contender wins.
+ARM_CLAIM="${TMPDIR:-/tmp}/memory-bridge-arm-claim"
+
+acquire_arm_claim() {
+  local waits=0 vanished=0 pid
+  while ! mkdir "$ARM_CLAIM" 2>/dev/null; do
+    if [ ! -e "$ARM_CLAIM" ]; then
+      # The mkdir failed yet the path is already gone: a concurrent
+      # contender's stale-takeover rm -rf landed in between (the next mkdir
+      # may win — retry), or the parent is genuinely unwritable (a real
+      # failure — die after a bounded wait instead of spinning forever
+      # silently).
+      vanished=$((vanished + 1))
+      [ "$vanished" -ge 20 ] && die "cannot create the memory-arm claim at $ARM_CLAIM"
+      sleep 0.1
+      continue
+    fi
+    vanished=0
+    pid="$(cat "$ARM_CLAIM/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ]; then
+      # Liveness must see OTHER users' processes: with TMPDIR unset (typical
+      # Linux) the claim dir is machine-wide, and kill -0 on a foreign live
+      # pid fails with EPERM — misreading that as dead would steal the claim
+      # and let the pre-run sweep remove a live peer's containers. ps -p sees
+      # any pid regardless of owner.
+      if kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1; then
+        die "another memory-arm driver (pid $pid) holds the machine-wide claim; the recorder .env, proxy port 4000, and the arm containers (tdai-*/mem0-server-*) belong to it — let it finish or stop it first (if that pid was recycled by an unrelated process after a SIGKILLed driver, remove $ARM_CLAIM and retry)"
+      fi
+      rm -rf "$ARM_CLAIM"  # dead holder: stale takeover
+      continue
+    fi
+    # No pid yet: a holder mid-acquire (its pid lands a beat after its
+    # mkdir). Retry briefly; if it never lands the holder died there.
+    waits=$((waits + 1))
+    if [ "$waits" -ge 50 ]; then
+      rm -rf "$ARM_CLAIM"
+      waits=0
+    fi
+    sleep 0.1
+  done
+  printf '%s\n' "$$" > "$ARM_CLAIM/pid"
+  # Mid-acquire theft guard: a concurrent contender's stale-takeover rm -rf
+  # can land between our winning mkdir and that write (or the write lands
+  # inside its fresh dir): if the pid does not read back as ours the claim
+  # was stolen mid-acquire — die rather than run two arms that would sweep
+  # each other's containers. No false positive: a contender only rm's a
+  # claim whose pid reads dead, and ours is live from this point.
+  [ "$(cat "$ARM_CLAIM/pid" 2>/dev/null)" = "$$" ] || die "the memory-arm claim at $ARM_CLAIM was stolen mid-acquire by a concurrent driver — retry the arm"
+}
+
+release_arm_claim() {
+  # Release only while this driver still holds the claim (the pid inside is
+  # ours — while this driver is alive no contender can read the claim as
+  # stale, so the check cannot race a takeover); a SIGKILL'd driver leaks the
+  # claim, and the next arm reclaims it via the dead-pid takeover above.
+  if [ "$(cat "$ARM_CLAIM/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$ARM_CLAIM"; fi
 }
 
 # ---- MemoryCore container lifecycle (tencentdb arm) ----
@@ -694,11 +773,25 @@ EOF
 case "$INTEGRATION_NAME" in
   cure_memory)
     export CURE_MEMORY_REPO="$INTEGRATION/src"
+    # The machine-wide single-arm claim, taken before the recorder .env is
+    # regenerated: a live peer's next per-instance proxy launch must never
+    # read a foreign roster (see acquire_arm_claim).
+    acquire_arm_claim
+    trap 'release_arm_claim' EXIT
     resolve_recorder
     write_recorder_env "EXTRACT"
     ;;
   mem0)
     MEM0_USER_ID="minisweagent-mem0-$(basename "$RUN_ROOT")"
+    # The machine-wide single-arm claim, taken before the recorder .env is
+    # regenerated (see acquire_arm_claim): port 8890 already makes concurrent
+    # mem0 server arms impossible; the claim enforces the same serialization
+    # at the process level for every arm — platform and library included,
+    # whose only shared resource is the recorder .env itself.
+    acquire_arm_claim
+    # Baseline claim release for the modes that manage no containers; the
+    # server mode replaces this trap with its container-cleanup version below.
+    trap 'release_arm_claim' EXIT
     case "$MEM0_MODE" in
       platform)
         # The hosted store is persistent across run roots: run isolation comes
@@ -709,59 +802,13 @@ case "$INTEGRATION_NAME" in
         ;;
       server)
         require_mem0_embedding_quartet
-        # The machine-wide single-arm claim (port 8890 already makes concurrent
-        # mem0 server arms impossible; the claim enforces it at the process
-        # level). Same discipline as the tencentdb arm's claim — see that block
-        # for the full rationale (atomic mkdir, dead-pid takeover, per-user
-        # TMPDIR). Claimed before the recorder .env is regenerated too.
-        MEM0_ARM_CLAIM="${TMPDIR:-/tmp}/mem0-arm-claim"
-        MEM0_CLAIM_WAITS=0
-        MEM0_CLAIM_VANISHED=0
-        while ! mkdir "$MEM0_ARM_CLAIM" 2>/dev/null; do
-          if [ ! -e "$MEM0_ARM_CLAIM" ]; then
-            # The mkdir failed yet the path is already gone: a concurrent
-            # contender's stale-takeover rm -rf landed in between (the next
-            # mkdir may win — retry), or the parent is genuinely unwritable
-            # (a real failure — die after a bounded wait instead of spinning
-            # forever silently, the same guard the tencentdb claim carries).
-            MEM0_CLAIM_VANISHED=$((MEM0_CLAIM_VANISHED + 1))
-            if [ "$MEM0_CLAIM_VANISHED" -ge 20 ]; then
-              die "cannot create the mem0 arm claim at $MEM0_ARM_CLAIM"
-            fi
-            sleep 0.1
-            continue
-          fi
-          MEM0_CLAIM_VANISHED=0
-          MEM0_CLAIM_PID="$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null || true)"
-          if [ -n "$MEM0_CLAIM_PID" ]; then
-            if kill -0 "$MEM0_CLAIM_PID" 2>/dev/null || ps -p "$MEM0_CLAIM_PID" >/dev/null 2>&1; then
-              die "another mem0 server arm driver (pid $MEM0_CLAIM_PID) holds the machine-wide claim; port $MEM0_SERVER_PORT and the mem0-server-* containers belong to it — let it finish or stop it first (if that pid was recycled by an unrelated process after a SIGKILLed driver, remove $MEM0_ARM_CLAIM and retry)"
-            fi
-            rm -rf "$MEM0_ARM_CLAIM"  # dead holder: stale takeover
-            continue
-          fi
-          MEM0_CLAIM_WAITS=$((MEM0_CLAIM_WAITS + 1))
-          if [ "$MEM0_CLAIM_WAITS" -ge 50 ]; then
-            rm -rf "$MEM0_ARM_CLAIM"  # a holder that never writes its pid died mid-acquire
-            MEM0_CLAIM_WAITS=0
-          fi
-          sleep 0.1
-        done
-        printf '%s\n' "$$" > "$MEM0_ARM_CLAIM/pid"
-        # A concurrent contender's stale-takeover rm -rf can land between our
-        # winning mkdir and that write (or the write lands inside its fresh
-        # dir): if the pid does not read back as ours the claim was stolen
-        # mid-acquire — die rather than run two arms that would sweep each
-        # other's containers. No false positive: a contender only rm's a
-        # claim whose pid reads dead, and ours is live from this point.
-        [ "$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ] || die "the mem0 arm claim at $MEM0_ARM_CLAIM was stolen mid-acquire by a concurrent driver — retry the arm"
         # Registered BEFORE the stack starts: a health-timeout die must not
         # leak the containers or the claim. Plain docker rm -f on exit: the
         # store lives on the host volumes (<run-root>/mem0-server), so a resume
         # recreates the stack over the same store. The container/net names are
         # unset until start_mem0_server_stack — default-expand them so a die
         # before that point never trips set -u inside the trap.
-        trap 'if [ "$(cat "$MEM0_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$MEM0_ARM_CLAIM"; fi; docker rm -f ${MEM0_APP_CONTAINER:-} ${MEM0_PG_CONTAINER:-} >/dev/null 2>&1 || true; docker network rm ${MEM0_SERVER_NET:-} >/dev/null 2>&1 || true' EXIT
+        trap 'release_arm_claim; docker rm -f ${MEM0_APP_CONTAINER:-} ${MEM0_PG_CONTAINER:-} >/dev/null 2>&1 || true; docker network rm ${MEM0_SERVER_NET:-} >/dev/null 2>&1 || true' EXIT
         start_mem0_server_stack
         configure_mem0_server
         selfcheck_mem0_server
@@ -848,86 +895,25 @@ case "$INTEGRATION_NAME" in
     esac
     TDAI_CONTAINER="tdai-$(basename "$RUN_ROOT")"
     TDAI_USER_ID="minisweagent-tdai-$(basename "$RUN_ROOT")"
-    # The machine-wide single-arm claim (port 8420 already makes concurrent
-    # tencentdb arms impossible; the claim enforces it at the process level):
-    # the sweep in start_tdai_container removes every tdai-* container, so a
-    # live peer arm must fail THIS arm loudly here — killing its container
-    # silently would fail its episode mid-run. The claim lives under the
-    # per-user temp dir, NOT the checkout: Docker Desktop's daemon is
-    # per-user, so one lock per user covers every checkout of this bundle on
-    # the machine (a checkout-local claim would let a second checkout sweep a
-    # live arm's container). Acquisition is the atomic
-    # mkdir(2) of the claim dir — a check-then-write file claim would let two
-    # drivers started together both pass and sweep each other's containers.
-    # The holder's pid lands in the dir a beat after its mkdir, so a claim
-    # with no readable pid yet is a holder mid-acquire: retry briefly, never
-    # take over (a holder dying exactly there leaves it forever; the bounded
-    # wait then breaks the tie). A claim naming a dead pid is stale (a
-    # SIGKILL'd driver): remove it and retry — re-acquisition is still the
-    # atomic mkdir, so exactly one contender wins. Claimed
-    # before the recorder .env is regenerated too, so a live peer's next
-    # per-instance proxy launch never reads a foreign roster.
-    TDAI_ARM_CLAIM="${TMPDIR:-/tmp}/tdai-arm-claim"
-    TDAI_CLAIM_WAITS=0
-    TDAI_CLAIM_VANISHED=0
-    while ! mkdir "$TDAI_ARM_CLAIM" 2>/dev/null; do
-      if [ ! -e "$TDAI_ARM_CLAIM" ]; then
-        # The mkdir failed yet the path is already gone: a concurrent
-        # contender's stale-takeover rm -rf landed in between (the next
-        # mkdir wins — retry), or the parent is genuinely unwritable (a
-        # real failure — die after a bounded wait instead of spinning
-        # forever silently).
-        TDAI_CLAIM_VANISHED=$((TDAI_CLAIM_VANISHED + 1))
-        if [ "$TDAI_CLAIM_VANISHED" -ge 20 ]; then
-          die "cannot create the tencentdb arm claim at $TDAI_ARM_CLAIM"
-        fi
-        sleep 0.1
-        continue
-      fi
-      TDAI_CLAIM_VANISHED=0
-      TDAI_CLAIM_PID="$(cat "$TDAI_ARM_CLAIM/pid" 2>/dev/null || true)"
-      if [ -n "$TDAI_CLAIM_PID" ]; then
-        # Liveness must see OTHER users' processes: with TMPDIR unset (typical
-        # Linux) the claim dir is machine-wide, and kill -0 on a foreign live
-        # pid fails with EPERM — misreading that as dead would steal the claim
-        # and let the pre-run sweep remove a live peer's tdai-* container.
-        # ps -p sees any pid regardless of owner.
-        if kill -0 "$TDAI_CLAIM_PID" 2>/dev/null || ps -p "$TDAI_CLAIM_PID" >/dev/null 2>&1; then
-          die "another tencentdb arm driver (pid $TDAI_CLAIM_PID) holds the machine-wide claim; port 8420 and the tdai-* containers belong to it — let it finish or stop it first (if that pid was recycled by an unrelated process after a SIGKILLed driver, remove $TDAI_ARM_CLAIM and retry)"
-        fi
-        rm -rf "$TDAI_ARM_CLAIM"  # dead holder: stale takeover
-        continue
-      fi
-      # No pid yet: a holder mid-acquire (its pid lands a beat after its
-      # mkdir). Retry briefly; if it never lands the holder died there.
-      TDAI_CLAIM_WAITS=$((TDAI_CLAIM_WAITS + 1))
-      if [ "$TDAI_CLAIM_WAITS" -ge 50 ]; then
-        rm -rf "$TDAI_ARM_CLAIM"
-        TDAI_CLAIM_WAITS=0
-      fi
-      sleep 0.1
-    done
-    printf '%s\n' "$$" > "$TDAI_ARM_CLAIM/pid"
-    # Same mid-acquire theft guard as the mem0 claim: a contender's
-    # stale-takeover rm -rf landing between our mkdir and this write (or the
-    # write landing in its fresh dir) must not leave two drivers each
-    # believing they hold the claim — both would sweep the other's
-    # containers. A live pid is never read as stale, so this cannot misfire.
-    [ "$(cat "$TDAI_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ] || die "the tencentdb arm claim at $TDAI_ARM_CLAIM was stolen mid-acquire by a concurrent driver — retry the arm"
+    # The machine-wide single-arm claim (see acquire_arm_claim for the
+    # acquisition/takeover discipline): port 8420 already makes concurrent
+    # tencentdb arms impossible; the claim enforces the same serialization at
+    # the process level for every arm — the sweep in start_tdai_container
+    # removes every tdai-* container, so a live peer arm must fail THIS arm
+    # loudly here rather than have its container killed mid-episode. Taken
+    # BEFORE the recorder .env is regenerated, so a live peer's next
+    # per-instance proxy launch never reads a foreign roster, and the trap is
+    # registered with it, so a later die never leaks the claim.
+    acquire_arm_claim
+    # The trap stays name-scoped to THIS root's container (a foreign one is
+    # never ours to kill on exit); a SIGKILL'd driver leaks both the container
+    # and the claim, and the next arm reclaims them via the dead-pid claim
+    # takeover and the pre-run sweep. Plain docker rm -f on exit: data lives
+    # on the host volume (<run-root>/tdai), so a resume recreates the
+    # container over the same store.
+    trap 'release_arm_claim; docker rm -f "$TDAI_CONTAINER" >/dev/null 2>&1 || true' EXIT
     resolve_recorder
     write_recorder_env "MEMORY"
-    # Registered BEFORE the container starts: a health-timeout die inside
-    # start_tdai_container must not leak a container bound to 127.0.0.1:8420
-    # or the arm claim. The trap stays name-scoped to THIS root's container
-    # (a foreign one is never ours to kill on exit) and releases the claim
-    # only while this driver still holds it (the pid inside is ours — while
-    # this driver is alive no contender can read the claim as stale, so the
-    # check cannot race a takeover); a SIGKILL'd driver leaks both, and the
-    # next arm reclaims them via the dead-pid claim takeover and the pre-run
-    # sweep. Plain rm -rf on exit: data lives on the host volume
-    # (<run-root>/tdai), so a resume recreates the container over the same
-    # store.
-    trap 'if [ "$(cat "$TDAI_ARM_CLAIM/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$TDAI_ARM_CLAIM"; fi; docker rm -f "$TDAI_CONTAINER" >/dev/null 2>&1 || true' EXIT
     start_tdai_container
     ;;
 esac
@@ -950,7 +936,23 @@ run_instance_cure_memory() {
   # client. Fail loudly when the role2 env file published no trajectory-scoped
   # URL — an unchecked value would only fail closed inside the backend,
   # leaving the episode to run with memory silently off (lane_base_url).
-  source "$ENV1"
+  # The MAIN-lane read is the one that CANNOT degrade fail-closed downstream:
+  # a vanished or malformed env file would leave the ambient roster upstream
+  # in OPENAI_BASE_URL (load_model_env exported it) — the episode would run
+  # UNRECORDED and direct-billed with memory on. Guard it like every lane.
+  if ! source "$ENV1"; then
+    log "FAIL $ID: cannot read the MAIN-lane env file ($ENV1) — refusing to run against the ambient roster upstream"
+    stop_proxy
+    return 1
+  fi
+  case "$OPENAI_BASE_URL" in
+    */trajectories/*/v1) ;;
+    *)
+      log "FAIL $ID: the MAIN-lane env file published no trajectory-scoped OPENAI_BASE_URL ($ENV1)"
+      stop_proxy
+      return 1
+      ;;
+  esac
   local extract_url
   if ! extract_url="$(lane_base_url "$ENV2")"; then
     log "FAIL $ID: no trajectory-scoped EXTRACT-lane URL from the role2 env file (see $IDIR/proxy.log)"
@@ -1016,8 +1018,23 @@ run_instance_annotate_lane() {
   # calls and serves only as the memory-annotate namespace. The memory lane's
   # explicit annotate URL derives from the role2 base URL (lane_base_url) —
   # failing loudly here keeps an unchecked value from surfacing deep inside
-  # the backend with the whole arm silently untraced.
-  source "$ENV1"
+  # the backend with the whole arm silently untraced. The MAIN-lane read gets
+  # the same guard as the cure arm's: a vanished or malformed env file would
+  # leave the ambient roster upstream in OPENAI_BASE_URL — an UNRECORDED,
+  # direct-billed episode with memory on.
+  if ! source "$ENV1"; then
+    log "FAIL $ID: cannot read the MAIN-lane env file ($ENV1) — refusing to run against the ambient roster upstream"
+    stop_proxy
+    return 1
+  fi
+  case "$OPENAI_BASE_URL" in
+    */trajectories/*/v1) ;;
+    *)
+      log "FAIL $ID: the MAIN-lane env file published no trajectory-scoped OPENAI_BASE_URL ($ENV1)"
+      stop_proxy
+      return 1
+      ;;
+  esac
   local base_url
   if ! base_url="$(lane_base_url "$ENV2")"; then
     log "FAIL $ID: no trajectory-scoped memory-annotate URL from the role2 env file (see $IDIR/proxy.log)"

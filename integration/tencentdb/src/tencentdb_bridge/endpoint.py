@@ -46,7 +46,9 @@ wire's 8192-char content cap (shared by add messages and update text; counted
 in UTF-16 code units — the zod schema's String.length unit — so the host-side
 check measures the same length the gateway rejects on), a
 contract-legal request the gateway must reject, answered 400 before any
-write rather than relayed as a 500.
+write rather than relayed as a 500. Request ``metadata`` on an add gets the
+same answer: the conversation schema has no metadata field, so accepting it
+would claim a write not fully made.
 """
 
 from __future__ import annotations
@@ -141,6 +143,11 @@ class TencentDBEndpoint(MemoryEndpoint):
             raise MemoryEndpointError(
                 400, "infer=false is unsupported: the gateway has no verbatim insert, every add feeds extraction"
             )
+        if request.metadata is not None:
+            # The conversation schema has no metadata field: silently dropping
+            # it would claim a write not fully made — the update path's 400
+            # rationale, applied to the add.
+            raise MemoryEndpointError(400, "add carries no metadata: the gateway schema has no metadata field")
         roles = {message.role for message in request.messages}
         if unsupported := sorted(roles - {"user", "assistant"}):
             # The conversation schema's role enum is user/assistant (anything

@@ -25,6 +25,7 @@ import json
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
 from pydantic import BaseModel, ValidationError
 
@@ -62,6 +63,10 @@ def make_handler(endpoint: MemoryEndpoint) -> type[BaseHTTPRequestHandler]:
         def _body(self, model: type[BaseModel]) -> BaseModel:
             try:
                 length = int(self.headers.get("Content-Length") or 0)
+                if length < 0:
+                    # read(-1) means "read to EOF": a held-open socket would
+                    # block the single serving thread forever.
+                    raise MemoryEndpointError(400, "negative Content-Length")
                 raw = json.loads(self.rfile.read(length) or b"{}")
             except (ValueError, json.JSONDecodeError) as e:
                 raise MemoryEndpointError(400, f"invalid JSON body: {e}") from e
@@ -80,7 +85,9 @@ def make_handler(endpoint: MemoryEndpoint) -> type[BaseHTTPRequestHandler]:
                 elif method == "POST" and path.rstrip("/") == "/v1/memories/search":
                     self._send(200, endpoint.search(self._body(SearchRequest)).model_dump())
                 elif path.startswith("/v1/memories/"):
-                    memory_id = path[len("/v1/memories/") :].strip("/")
+                    # Percent-decode: the id segment is URL-encoded on the wire
+                    # (an encoded slash decodes to "/" and misses the route).
+                    memory_id = unquote(path[len("/v1/memories/") :]).strip("/")
                     if not memory_id or "/" in memory_id:
                         self._error(404, f"unknown route: {method} {path}")
                     elif method == "PUT":

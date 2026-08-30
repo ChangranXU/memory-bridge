@@ -43,7 +43,7 @@ Ingest one or more conversation messages and extract memories from them. Writes 
 | `request_id` | `string` | No | Auto-generated UUID | Echoed back in the response for correlation. |
 | `session_id` | `string` | No | `null` | Logical session grouping (the tencentdb adapter ignores a caller-supplied value and mints its own). |
 | `infer` | `boolean` | No | `true` | `true`: extract memories from messages. `false`: store messages verbatim (rejected with `400` by adapters whose engine has no verbatim insert, e.g. tencentdb — see [TencentDB Agent Memory](../integrations/tencentdb.md)). |
-| `metadata` | `object` | No | `null` | Arbitrary key-value metadata attached to stored memories. |
+| `metadata` | `object` | No | `null` | Arbitrary key-value metadata attached to stored memories. Adapters whose engine has no metadata channel reject a metadata-bearing add with `400` rather than drop it silently (tencentdb always; CURE only with `infer: false` — with `infer: true` the metadata reaches the extraction input). |
 
 ### Message object
 

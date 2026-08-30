@@ -144,6 +144,18 @@ def test_record_unavailable_is_a_no_op(tmp_path):
     assert backend._counts == {}
 
 
+def test_record_treats_an_explicit_null_extra_as_no_extras(tmp_path):
+    """An explicit extra: None is no extras — never an AttributeError escaping
+    the per-message containment (record() must not raise into the agent loop
+    even with strict unset, and must not drop the message with a spurious
+    backend error either)."""
+    backend = _started(tmp_path)
+    backend.record([{"role": "user", "content": "kept", "extra": None}], step=1)
+    assert backend.system.pending == [{"role": "user", "content": "kept", "step": 1}]
+    assert backend._counts["messages_recorded"] == 1
+    assert backend._counts["backend_errors"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Extraction: scheduling, shell, breaker
 # ---------------------------------------------------------------------------
@@ -474,6 +486,19 @@ def test_recall_min_score_none_disables_the_floor(tmp_path):
     backend.set_task("t")
     backend.system.hits = ["one"]  # no score, but no floor either
     assert backend.recall_context()["n_memories"] == 1
+
+
+def test_recall_min_score_rejects_non_finite(tmp_path):
+    """A NaN floor compares False against every score and an inf floor drops
+    every finite one — either would silently suppress all recall hits for the
+    whole episode while memory.json shows a configured floor. Rejected at
+    config validation (the memory config fails loudly on bad values)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _config(tmp_path, recall_min_score=float("nan"))
+    with pytest.raises(ValidationError):
+        _config(tmp_path, recall_min_score=float("inf"))
 
 
 def test_provenance_suffix_marks_this_and_earlier_episodes(tmp_path):

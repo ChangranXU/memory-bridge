@@ -54,7 +54,9 @@ class MemoryConfig(BaseModel):
     # Relevance floor: hits scoring below it (or carrying no score) are dropped
     # before any quantity bound; None disables the floor. The scale is
     # integration-defined (never compare values across integrations).
-    recall_min_score: float | None = None
+    # Non-finite values are rejected: a NaN floor compares False against every
+    # score and would silently drop all recall hits for the whole episode.
+    recall_min_score: float | None = Field(default=None, allow_inf_nan=False)
     # Query rewrite schedule: 0 disables rewriting (the query stays the task
     # text). Default off, mirroring the "default = current behavior"
     # discipline: no arm run should depend on an LLM rewriter before rewrite

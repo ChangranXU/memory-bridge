@@ -82,9 +82,12 @@ load_model_env() {
 }
 
 # read_instance_ids IDS_FILE — print one id per line, skipping blank lines,
-# comments (# ...), and duplicates (order-preserving), and stripping stray
-# carriage returns. Dedupe matters: a repeated id must never run twice in one
+# comments (# ...), and duplicates (order-preserving), and trimming stray
+# whitespace/carriage returns. Trimming matters: the Python consumers strip
+# (merge_predictions.py, the driver's validity probe), so an untrimmed id
+# would anchor-match zero instances while the bookkeeping sees a clean id.
+# Dedupe matters: a repeated id must never run twice in one
 # arm — the rerun would recall the memories its first attempt approved.
 read_instance_ids() {
-  tr -d '\r' < "$1" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | awk '!seen[$0]++'
+  tr -d '\r' < "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^#' | grep -v '^$' | awk '!seen[$0]++'
 }

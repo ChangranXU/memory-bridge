@@ -312,6 +312,35 @@ def test_empty_completion_is_an_error_that_holds_the_checkpoint(tmp_path, monkey
         system.close()
 
 
+def test_non_dict_body_is_an_error_that_holds_the_checkpoint(tmp_path, monkeypatch):
+    """A 200 whose body parses to a NON-dict ("null", a bare list, a number)
+    is a failed response, never a silent "nothing worth memorizing" decision:
+    last_error is set, the extraction result carries the error, and the
+    session checkpoint does NOT advance past the unprocessed messages. (The
+    bare-list case additionally pins that the choices read never raises an
+    uncaught AttributeError on a non-dict body.)"""
+    import urllib.request
+
+    from cure_memory.extractor import ChatGPTMemoryDecisionClient
+    from cure_memory.system import CUREMemorySystem
+
+    for index, body in enumerate((b"null", b'["not", "an", "envelope"]', b"123")):
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: _StubbedResponse(body))
+        client = ChatGPTMemoryDecisionClient(
+            model="m", base_url="https://extract.invalid/v1", api_key="k", max_retries=0
+        )
+        system = CUREMemorySystem(str(tmp_path / f"body-{index}.sqlite3"), llm_client=client)
+        try:
+            system.start_session("alice", session_id="s1")
+            system.record_message("user", "remember the rolling rule")
+            result = system.extract_runtime_memories()
+            assert client.last_error == "non_dict_body"
+            assert result.errors == ["llm_decision_failed:non_dict_body"]
+            assert system._last_extracted_message_id_by_session["s1"] == 0  # checkpoint held
+        finally:
+            system.close()
+
+
 def _stubbed_client(tmp_path, monkeypatch, content: str):
     """A real ChatGPTMemoryDecisionClient whose HTTP layer returns one canned
     completion carrying ``content`` (the parsing/validation layers run)."""

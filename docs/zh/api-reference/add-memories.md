@@ -43,7 +43,7 @@ description: 摄入消息并从中提取记忆。
 | `request_id` | `string` | 否 | 自动生成 UUID | 在响应中回显以供关联。 |
 | `session_id` | `string` | 否 | `null` | 逻辑会话分组（tencentdb 适配器会忽略调用方提供的值，改为自行生成）。 |
 | `infer` | `boolean` | 否 | `true` | `true`：从消息中提取记忆。`false`：逐字存储消息（引擎不支持逐字插入的适配器会以 `400` 拒绝，例如 tencentdb——参见 [TencentDB Agent Memory](../integrations/tencentdb.md)）。 |
-| `metadata` | `object` | 否 | `null` | 附加到存储记忆的任意键值元数据。 |
+| `metadata` | `object` | 否 | `null` | 附加到存储记忆的任意键值元数据。引擎没有元数据通道的适配器会以 `400` 拒绝携带元数据的 add，而非静默丢弃（tencentdb 总是拒绝；CURE 仅在 `infer: false` 时拒绝——`infer: true` 时元数据会进入提取输入）。 |
 
 ### Message 对象
 

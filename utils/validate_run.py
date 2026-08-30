@@ -41,9 +41,18 @@ def check(cond, label):
 
 
 def main() -> int:
+    if len(sys.argv) != 2:
+        sys.exit("usage: validate_run.py <run-dir>")
     run = Path(sys.argv[1])
-    events = [json.loads(line) for line in (run / "trajectory.jsonl").read_text().splitlines()]
-    meta = json.loads((run / "run.json").read_text())
+    try:
+        events = [json.loads(line) for line in (run / "trajectory.jsonl").read_text().splitlines() if line.strip()]
+        meta = json.loads((run / "run.json").read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"FAIL could not load the run artifacts under {run}: {e}")
+        return 1
+    if not isinstance(meta, dict) or not events or not all(isinstance(e, dict) and "type" in e and "seq" in e for e in events):
+        print(f"FAIL the artifacts under {run} hold no well-formed events/run.json")
+        return 1
 
     # 1. proxy-source completeness
     lane_events = [e for e in events if e["type"] not in ("agent_start", "agent_end")]
@@ -52,7 +61,7 @@ def main() -> int:
         not any("proxy_source" in e for e in events if e["type"] in ("agent_start", "agent_end")),
         "agent_start/agent_end carry no lane",
     )
-    lanes = sorted({str(e["proxy_source"]) for e in lane_events})
+    lanes = sorted({str(e.get("proxy_source")) for e in lane_events})
     print(f"       lanes: {lanes}")
 
     # 2. order
@@ -66,14 +75,30 @@ def main() -> int:
     order_bad = []
     for e in events:
         if e["type"] == "turn_start":
-            turn_span[e["turn"]] = [e["seq"], None]
+            turn = e.get("turn")
+            if turn is None or turn in turn_span:
+                # A turn-less start is corruption, and a duplicated start must
+                # not silently overwrite the first span (a turn opened twice
+                # and closed once would otherwise pass).
+                order_bad.append(e["seq"])
+            else:
+                turn_span[turn] = [e["seq"], None]
         elif e["type"] == "turn_end":
-            if e["turn"] not in turn_span or turn_span[e["turn"]][1] is not None:
+            if e.get("turn") not in turn_span or turn_span[e["turn"]][1] is not None:
                 order_bad.append(e["seq"])
             else:
                 turn_span[e["turn"]][1] = e["seq"]
     check(not order_bad and all(span[1] is not None for span in turn_span.values()),
           f"every turn_start closed exactly once, in order (bad: {order_bad[:5]})")
+    out_of_span = []
+    for e in events:
+        turn = e.get("turn")
+        if turn is None:
+            continue
+        span = turn_span.get(turn)
+        if span is None or not (span[0] <= e["seq"] and (span[1] is None or e["seq"] <= span[1])):
+            out_of_span.append(e["seq"])
+    check(not out_of_span, f"turn-scoped events sit between their turn_start/turn_end (bad: {out_of_span[:5]})")
 
     # 3. no redundant (lane, msg) recordings
     live = {}
@@ -81,14 +106,15 @@ def main() -> int:
     for e in events:
         lane = e.get("proxy_source")
         if e["type"] == "message_end":
-            key = (lane, e["msg"])
+            key = (lane, e.get("msg"))
             if key in live:
-                duplicates.append((lane, e["msg"], e["seq"]))
+                duplicates.append((lane, e.get("msg"), e["seq"]))
             live[key] = e["seq"]
         elif e["type"] == "message_retracted":
-            live.pop((lane, e["msg"]), None)
+            live.pop((lane, e.get("msg")), None)
         elif e["type"] == "history_rewritten":
-            for key in [key for key in live if key[0] == lane and key[1] >= e["kept"]]:
+            kept = e.get("kept")
+            for key in [key for key in live if key[0] == lane and key[1] is not None and kept is not None and key[1] >= kept]:
                 del live[key]
     check(not duplicates, f"no double-recorded (lane, msg) message_end (dups: {duplicates[:5]})")
 
@@ -110,17 +136,17 @@ def main() -> int:
     print(f"       operations with bound call refs: {bound_ops}/{len(index.operations)}")
 
     # 5. run.json counters
-    call_dirs = [d for d in (run / "calls").iterdir() if d.is_dir()]
-    check(meta["call_count"] == len(call_dirs), f"call_count matches calls/ ({meta['call_count']} vs {len(call_dirs)})")
+    call_dirs = [d for d in (run / "calls").iterdir() if d.is_dir()] if (run / "calls").is_dir() else []
+    check(meta.get("call_count") == len(call_dirs), f"call_count matches calls/ ({meta.get('call_count')} vs {len(call_dirs)})")
     check(
-        meta["turn_count"] == len(turn_span),
-        f"turn_count matches log ({meta['turn_count']} vs {len(turn_span)})",
+        meta.get("turn_count") == len(turn_span),
+        f"turn_count matches log ({meta.get('turn_count')} vs {len(turn_span)})",
     )
     check(
-        meta["message_count"] == sum(1 for e in events if e["type"] == "message_end"),
-        f"message_count matches log ({meta['message_count']})",
+        meta.get("message_count") == sum(1 for e in events if e["type"] == "message_end"),
+        f"message_count matches log ({meta.get('message_count')})",
     )
-    check(meta["status"] in ("stopped", "completed"), f"run status finalized ({meta['status']})")
+    check(meta.get("status") in ("stopped", "completed"), f"run status finalized ({meta.get('status')})")
 
     print(f"{'FAILURES: ' + str(failures) if failures else 'ALL CHECKS PASSED'} — {run}")
     return 1 if failures else 0

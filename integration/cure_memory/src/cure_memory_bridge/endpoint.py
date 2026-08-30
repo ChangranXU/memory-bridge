@@ -5,14 +5,22 @@ Maps the shared add/search/update/delete actions onto a ``CUREMemorySystem``:
 - ``add`` binds (or reuses) the session for ``(user_id, session_id)``, records
   the messages, and — with ``infer=true`` — runs CURE's extraction pipeline;
   ``infer=false`` stores each message verbatim as its own approved memory row.
-  The response returns only after the rows are persisted and searchable.
+  The response returns only after the rows are persisted and searchable, and
+  ``memory_ids`` reports the upsert's EFFECTIVE row per candidate — on an
+  identical-content dedupe no-op that is the pre-existing row's id, never an
+  empty list for a persisted memory (the same convention the verbatim path's
+  retry documents). Request ``metadata`` reaches the extraction input with
+  ``infer=true``; a verbatim (``infer=false``) add has no metadata channel, so
+  a metadata-bearing one is a 400 rather than a silent drop.
   A session-less add (``session_id`` omitted) always mints a fresh session and
   the response carries the MINTED id, not the request's — the one deliberate
   deviation from the contract's byte-for-byte echo rule.
 - ``search`` runs CURE's approved-memory search inside the exact ``user_id``
   scope (the sole retrieval-isolation boundary).
 - ``update`` replaces a row's value via CURE's supersede-by-replace rule;
-  a metadata-only update is a 400 (CURE rows carry no arbitrary metadata).
+  any metadata-bearing update is a 400 (CURE rows carry no arbitrary
+  metadata — a text+metadata update applied partially would silently drop
+  the metadata half).
 - ``delete`` marks the row ``deleted``, addressed by id.
 
 CURE memory ids are integer row ids, so endpoint-side ``memory_id`` strings
@@ -62,8 +70,14 @@ class CureMemoryEndpoint(MemoryEndpoint):
             result = system.extract_runtime_memories()
             if result.errors:
                 raise MemoryEndpointError(500, f"extraction failed: {'; '.join(result.errors)}")
-            memory_ids = [str(memory.id) for memory in result.candidates if memory.id is not None]
+            memory_ids = [str(memory.id) for memory in result.persisted if memory.id is not None]
         else:
+            if request.metadata is not None:
+                # Verbatim rows carry no arbitrary metadata (the update path's
+                # 400 ground): silently dropping it would claim a write not
+                # fully made. infer=true honors metadata via the recorded
+                # messages.
+                raise MemoryEndpointError(400, "metadata is not stored on verbatim adds (infer=false)")
             for index, message in enumerate(request.messages):
                 memory = system.memory_add(
                     request.user_id,
@@ -87,8 +101,12 @@ class CureMemoryEndpoint(MemoryEndpoint):
         return SearchResponse(data=[self._record(memory) for memory in memories[: request.top_k]])
 
     def update(self, memory_id: str, request: UpdateRequest, *, user_id: str | None = None) -> UpdateResponse:
-        if request.text is None:
-            raise MemoryEndpointError(400, "text is required: this integration stores no standalone metadata")
+        if request.text is None or request.metadata is not None:
+            # CURE rows carry no arbitrary metadata: a metadata-only update has
+            # nothing to apply, and a text+metadata update applied partially
+            # would silently drop the metadata half — 400 rather than claim a
+            # write that was not (fully) made.
+            raise MemoryEndpointError(400, "update requires text alone: this integration stores no standalone metadata")
         row_id = self._parse_id(memory_id)
         try:
             memory = self._system.memory_replace(user_id or self._default_user_id, row_id, request.text)

@@ -424,12 +424,21 @@ class TencentDBBackend(BaseMemoryBackend):
             logger.exception("failed to append the episode-window sidecar")
 
     def _record_drain(self) -> None:
-        drained = utc_now_iso()
-        self._append_sidecar({"event": "drain", "session_id": self._session_id, "drained_at": drained})
+        # Exactly one drain record per episode window, however the final tick
+        # ended: the send/resolve failure paths reach here from
+        # _perform_extraction's except, the drain paths from _drain_final's
+        # finally — a call for an already-closed window is a no-op, so the
+        # sidecar never carries a duplicate boundary. Sidecar first, then the
+        # in-memory close (a sidecar failure degrades to in-memory-only
+        # attribution, never a raise).
         for window in reversed(self._windows):
-            if window.session_id == self._session_id and window.end is None:
+            if window.session_id == self._session_id:
+                if window.end is not None:
+                    return
+                drained = utc_now_iso()
+                self._append_sidecar({"event": "drain", "session_id": self._session_id, "drained_at": drained})
                 window.end = _parse_iso(drained) or datetime.now(timezone.utc)
-                break
+                return
 
     def _origin_session(self, created_at: str) -> str:
         """Map a hit's created_at onto the owning episode's session id ('' = unknown)."""
@@ -701,7 +710,9 @@ class TencentDBBackend(BaseMemoryBackend):
         L1 cycle — a ~0-budget poll would raise on a tail that lands moments
         later. The drain record closes the episode's attribution window even
         when the drain fails — the boundary is when this episode stopped
-        waiting."""
+        waiting; the send/resolve failure paths of the final tick close it
+        from ``_perform_extraction``'s except instead (``_record_drain`` is
+        idempotent, so the two never double-record)."""
         assert self._client is not None
         try:
             deadline = time.monotonic() + self.config.finalize_drain_budget
@@ -781,6 +792,13 @@ class TencentDBBackend(BaseMemoryBackend):
                 self._drain_tick()
             rows = self._resolve_watermark() if self._watermark else []
         except Exception as e:
+            if final:
+                # The episode stopped waiting here however the final tick
+                # failed: a failed _send_pending/_resolve_watermark never
+                # reaches _drain_final, so close the attribution window from
+                # here (idempotent — a failed drain's own finally already
+                # recorded it).
+                self._record_drain()
             try:
                 self._generation_finish_exception(operation, step, e)
             except Exception:

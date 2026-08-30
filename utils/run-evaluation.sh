@@ -28,6 +28,9 @@ INSTANCE_IDS=()
 while IFS= read -r INSTANCE_ID; do
   INSTANCE_IDS+=("$INSTANCE_ID")
 done < <(read_instance_ids "$RUN_ROOT_RESOLVED/instance-ids.txt")
+# An empty list under set -u dies cryptically on "${INSTANCE_IDS[@]}" with
+# macOS's stock bash 3.2 — fail here with the reason instead.
+[ "${#INSTANCE_IDS[@]}" -gt 0 ] || die "no instance ids in $RUN_ROOT_RESOLVED/instance-ids.txt"
 
 cd "$EVAL_DIR"
 PYTHONPATH="$SWE_BENCH" \

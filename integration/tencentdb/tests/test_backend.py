@@ -393,6 +393,45 @@ def test_finalize_drain_overrun_is_one_extraction_failure(make_backend, fake_cli
     assert sidecar["event"] == "drain"
 
 
+def test_failed_final_add_still_records_the_drain(make_backend, fake_client):
+    """A failed conversation/add on the final tick never reaches _drain_final,
+    but the episode's attribution window must still close — the same invariant
+    the drain-failure path pins (an open-ended window would misattribute a
+    later episode's late-landing rows to this episode's session)."""
+    from tencentdb_bridge.client import TencentDBApiError
+
+    backend = make_backend()
+    backend.start()
+    backend.record([{"role": "user", "content": "m"}], step=1)
+    fake_client.add_error = TencentDBApiError(503, "gateway transport error")
+    backend.finalize()
+    assert backend._counts["extraction_errors"] == 1
+    records = [
+        json.loads(line)
+        for line in Path(backend.config.run_root, "tdai", "episodes.jsonl").read_text().splitlines()
+    ]
+    drains = [r for r in records if r.get("event") == "drain" and r.get("session_id") == backend._session_id]
+    assert len(drains) == 1
+
+
+def test_failed_final_drain_records_exactly_one_drain(make_backend, fake_client, no_sleep):
+    """The drain failure's own finally already records the drain: the
+    except-path safety net must not append a duplicate boundary for the same
+    window (``_record_drain`` is idempotent per open window)."""
+    backend = make_backend()
+    backend.start()
+    backend.record([{"role": "user", "content": "m"}], step=1)
+    fake_client.idle_answers = [False]  # every drain attempt fails within budget
+    backend.finalize()
+    assert backend._counts["extraction_errors"] == 1
+    records = [
+        json.loads(line)
+        for line in Path(backend.config.run_root, "tdai", "episodes.jsonl").read_text().splitlines()
+    ]
+    drains = [r for r in records if r.get("event") == "drain" and r.get("session_id") == backend._session_id]
+    assert len(drains) == 1
+
+
 def test_finalize_tail_drain_gets_a_fresh_tick_budget(make_backend, fake_client, no_sleep):
     """The post-idle-wait drain must not ride the finalize deadline remainder:
     the unconditional sleep can consume it entirely, and the timer-fired tail

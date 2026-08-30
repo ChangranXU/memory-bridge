@@ -307,7 +307,7 @@ def test_empty_completion_is_an_error_that_holds_the_checkpoint(tmp_path, monkey
         result = system.extract_runtime_memories()
         assert client.last_error == "empty_content"
         assert result.errors == ["llm_decision_failed:empty_content"]
-        assert system._last_extracted_message_id_by_session["s1"] == 0  # checkpoint held
+        assert system._last_extracted_message_id_by_session[("alice", "s1")] == 0  # checkpoint held
     finally:
         system.close()
 
@@ -336,7 +336,7 @@ def test_non_dict_body_is_an_error_that_holds_the_checkpoint(tmp_path, monkeypat
             result = system.extract_runtime_memories()
             assert client.last_error == "non_dict_body"
             assert result.errors == ["llm_decision_failed:non_dict_body"]
-            assert system._last_extracted_message_id_by_session["s1"] == 0  # checkpoint held
+            assert system._last_extracted_message_id_by_session[("alice", "s1")] == 0  # checkpoint held
         finally:
             system.close()
 
@@ -367,7 +367,7 @@ def test_wrong_schema_decision_is_an_error_that_holds_the_checkpoint(tmp_path, m
         result = system.extract_runtime_memories()
         assert client.last_error == "invalid_decision_schema"
         assert result.errors == ["llm_decision_failed:invalid_decision_schema"]
-        assert system._last_extracted_message_id_by_session["s1"] == 0  # checkpoint held
+        assert system._last_extracted_message_id_by_session[("alice", "s1")] == 0  # checkpoint held
     finally:
         system.close()
 
@@ -406,7 +406,7 @@ def test_non_dict_decision_items_are_a_schema_error(tmp_path, monkeypatch):
         result = system.extract_runtime_memories()
         assert client.last_error == "invalid_decision_schema"
         assert result.errors == ["llm_decision_failed:invalid_decision_schema"]
-        assert system._last_extracted_message_id_by_session["s1"] == 0  # checkpoint held
+        assert system._last_extracted_message_id_by_session[("alice", "s1")] == 0  # checkpoint held
     finally:
         system.close()
 
@@ -425,7 +425,7 @@ def test_null_decision_value_reads_as_an_empty_list(tmp_path, monkeypatch):
         result = system.extract_runtime_memories()
         assert client.last_error is None
         assert result.errors == []
-        assert system._last_extracted_message_id_by_session["s1"] == message.id  # advanced
+        assert system._last_extracted_message_id_by_session[("alice", "s1")] == message.id  # advanced
     finally:
         system.close()
 
@@ -444,7 +444,7 @@ def test_partial_schema_decision_is_a_valid_empty_decision(tmp_path, monkeypatch
         result = system.extract_runtime_memories()
         assert client.last_error is None
         assert result.errors == []
-        assert system._last_extracted_message_id_by_session["s1"] == message.id  # advanced
+        assert system._last_extracted_message_id_by_session[("alice", "s1")] == message.id  # advanced
     finally:
         system.close()
 

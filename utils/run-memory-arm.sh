@@ -256,11 +256,14 @@ resolve_recorder() {
 # rewriter) rides the same flat BASE_URL; the roster's flat/per-role mutual
 # exclusion is per value name, so the mixed form stays legal.
 write_recorder_env() {
-  umask 077
   # The die is load-bearing: this script runs under set -u only, so a failed
   # write (unwritable checkout, full disk) would otherwise go unnoticed and
   # every per-instance proxy would boot from the PREVIOUS arm's stale roster.
-  cat > "$RECORDER/.env" <<EOF || die "failed to regenerate the recorder .env at $RECORDER/.env"
+  # The subshell scopes umask 077 to this credential file alone — the rest of
+  # the driver's artifacts keep the caller's umask.
+  (
+    umask 077
+    cat > "$RECORDER/.env" <<EOF
 ROLE1="MAIN"
 ROLE1_MODEL="$MODEL"
 ROLE1_API_KEY="$API_KEY"
@@ -275,12 +278,38 @@ ROLE3_API_KEY="$QUERY_API_KEY"
 ROLE3_API="$QUERY_API"
 BASE_URL="$BASE_URL"
 EOF
+  ) || die "failed to regenerate the recorder .env at $RECORDER/.env"
+}
+
+# sweep_orphan_proxy — reclaim the recorder's fixed port 4000 from a leaked
+# proxy. A driver that died mid-instance (SIGKILL, or a signal its EXIT trap
+# could not catch) leaves its per-instance proxy alive; the orphan keeps
+# 127.0.0.1:4000 bound and fails every later instance's proxy boot. The
+# machine-wide arm claim is held for the whole arm (acquire_arm_claim), so no
+# live arm can own that listener — this is the proxy analog of the tdai-* /
+# mem0-server-* container sweeps. SIGTERM, never SIGKILL (rule 5): the
+# recorder finalizes its run dirs on TERM exactly as on INT, and TERM cannot
+# be inherited-ignored the way SIGINT is for a shell's background jobs. A
+# missing lsof degrades the sweep to a no-op (the boot then fails as before,
+# with the cause in proxy.log).
+sweep_orphan_proxy() {
+  local pids i
+  pids="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true)"
+  [ -n "$pids" ] || return 0
+  log "sweeping orphaned recorder proxy bound to 127.0.0.1:4000 (pid $(echo $pids)) — a previous driver died mid-instance"
+  kill $pids 2>/dev/null || true  # word-splitting intended: one pid per word
+  for i in $(seq 1 30); do
+    lsof -ti tcp:4000 -sTCP:LISTEN >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  kill $pids 2>/dev/null || true  # the same finalizing TERM once more, then the boot decides
 }
 
 # start_proxy IDIR ID — start this instance's roster proxy and wait for all
 # role env files; sets PROXY_PID/ENV1/ENV2/ENV3 (the caller's locals).
 start_proxy() {
   local IDIR="$1" ID="$2" i
+  sweep_orphan_proxy
   mkdir -p "$IDIR/$ID"
   # A stale trajectory dir is from an aborted attempt; its .proxy_env_role*
   # would point at a dead trajectory ID and fail every model call.
@@ -440,7 +469,9 @@ write_tdai_gateway_yaml() {
   # l1IdleTimeoutSeconds 30 (not the 600 s default) is load-bearing: the
   # episode tail must land inside the backend's finalize drain. bm25 language
   # "en" is required — the upstream default is "zh" (jieba).
-  cat > "$RUN_ROOT/tdai/tdai-gateway.yaml" <<EOF
+  # The || die mirrors write_recorder_env's: under set -u only, a failed write
+  # would otherwise surface 120 s later as the container health timeout.
+  cat > "$RUN_ROOT/tdai/tdai-gateway.yaml" <<EOF || die "failed to write $RUN_ROOT/tdai/tdai-gateway.yaml"
 deployMode: standalone
 stateBackend: local
 promptMode: "code"

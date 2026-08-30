@@ -93,7 +93,9 @@ def main() -> int:
         updated = counts.get("memories_updated")
         deleted = counts.get("memories_deleted")
         injections = counts.get("recall_injections", 0)
-        chars = sum(event.get("chars", 0) for event in events if event.get("kind") == "recall")
+        # `or 0`, not the default: a null chars must not abort the whole table
+        # (the same one-malformed-log-skips-its-row discipline as above).
+        chars = sum(event.get("chars") or 0 for event in events if event.get("kind") == "recall")
         cache_hits = counts.get("recall_cache_hits")
         cache_share = (
             f"{cache_hits / injections:.0%}" if cache_hits is not None and injections else ("-" if cache_hits is None else "0%")

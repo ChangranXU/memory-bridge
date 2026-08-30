@@ -45,7 +45,18 @@ def main() -> int:
             "(run utils/run-evaluation.sh first)"
         )
     report_path = reports[-1]
-    report = json.loads(report_path.read_text())
+    try:
+        report = json.loads(report_path.read_text())
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"unreadable evaluation report {report_path}: {e}")
+    if not isinstance(report, dict) or not isinstance(report.get("total_instances"), int):
+        # The name-shape filter alone can still crown a stray same-suffix JSON
+        # dropped INSIDE the run dir (scratch notes) — without this gate it
+        # would print all-None counters under a false-success verdict.
+        raise SystemExit(
+            f"{report_path} is not a SWE-bench harness report (no integer total_instances) — "
+            "a stray same-suffix JSON is shadowing the real report; remove it"
+        )
 
     print(f"report: {report_path}")
     for field in COUNTERS:

@@ -129,7 +129,9 @@
   the vector lane's embed costs) bounding the first drain. A drain record
   closes the episode's attribution window even when the drain fails — and
   also when the episode recorded nothing at all (the readiness guard's
-  no-op final still records it).
+  no-op final still records it) or when the final tick's send/resolve
+  fails before the drain runs (the except path records it;
+  `_record_drain` is idempotent, so the paths never double-record).
 - **Recall surface**: L1 scored hits (repo-scoped) + the L3 persona as a
   **prepended score-less pseudo-hit** + the L2 scene index as a header
   section. L0 raw conversation search is agent-initiated (see the

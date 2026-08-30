@@ -56,7 +56,9 @@ def main() -> int:
             continue
         try:
             payload = json.loads(pred_path.read_text())
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
+            # ValueError covers both JSONDecodeError and a non-UTF-8 file's
+            # UnicodeDecodeError — either way the gate's message, not a traceback.
             raise SystemExit(f"unreadable preds.json for {instance_id}: {e}")
         if not isinstance(payload, dict):
             raise SystemExit(f"preds.json for {instance_id} is not a JSON object")

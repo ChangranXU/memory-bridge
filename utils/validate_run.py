@@ -47,7 +47,7 @@ def main() -> int:
     try:
         events = [json.loads(line) for line in (run / "trajectory.jsonl").read_text().splitlines() if line.strip()]
         meta = json.loads((run / "run.json").read_text())
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
         print(f"FAIL could not load the run artifacts under {run}: {e}")
         return 1
     if not isinstance(meta, dict) or not events or not all(isinstance(e, dict) and "type" in e and "seq" in e for e in events):

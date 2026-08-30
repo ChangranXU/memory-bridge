@@ -32,6 +32,10 @@ class CUREMemorySystem:
         self.current_session_id: Optional[str] = None
         self.current_user_id: Optional[str] = None
         self.current_project_id: Optional[str] = None
+        # Keyed by (user_id, session_id), not the session id alone: the
+        # endpoint surface lets two users reuse one session id, and a shared
+        # checkpoint would let one user's extraction skip (starve) the other's
+        # un-extracted messages.
         self._last_extracted_message_id_by_session = {}
 
     def start_session(
@@ -44,7 +48,7 @@ class CUREMemorySystem:
         self.current_project_id = project_id
         self.current_session_id = session_id or f"session_{uuid4().hex}"
         self._last_extracted_message_id_by_session.setdefault(
-            self.current_session_id,
+            (user_id, self.current_session_id),
             0,
         )
         return self.current_session_id
@@ -63,8 +67,11 @@ class CUREMemorySystem:
 
     def extract_runtime_memories(self) -> ExtractionResult:
         self._require_session()
-        after_id = self._last_extracted_message_id_by_session.get(self.current_session_id, 0)
-        messages = self.store.list_messages(self.current_session_id, after_id=after_id)
+        checkpoint_key = (self.current_user_id, self.current_session_id)
+        after_id = self._last_extracted_message_id_by_session.get(checkpoint_key, 0)
+        # user_id scopes the read (the isolation boundary): under a shared
+        # session id, one user's extraction never ingests another's messages.
+        messages = self.store.list_messages(self.current_session_id, self.current_user_id, after_id=after_id)
         existing = self.store.list_memories(
             user_id=self.current_user_id,
             project_id=self.current_project_id,
@@ -78,15 +85,19 @@ class CUREMemorySystem:
         if result.errors:
             return result
 
-        for memory in result.deleted:
-            memory.review_status = "deleted"
-            self.store.update_memory(memory)
+        # One atomic unit for the deletion batch (the same crash discipline
+        # the supersede sequences have): a crash mid-batch must not persist
+        # half the deletions while the checkpoint below holds for the retry.
+        with self.store.atomic():
+            for memory in result.deleted:
+                memory.review_status = "deleted"
+                self.store.update_memory(memory)
 
         for memory in result.candidates:
             result.persisted.append(self._upsert_memory(memory))
 
         if messages:
-            self._last_extracted_message_id_by_session[self.current_session_id] = max(
+            self._last_extracted_message_id_by_session[checkpoint_key] = max(
                 message.id for message in messages if message.id is not None
             )
         return result
@@ -95,8 +106,9 @@ class CUREMemorySystem:
         """Whether the active session holds messages past the extraction
         checkpoint — a tick with none has nothing to decide and is not a call."""
         self._require_session()
-        after_id = self._last_extracted_message_id_by_session.get(self.current_session_id, 0)
-        return self.store.has_messages(self.current_session_id, after_id=after_id)
+        checkpoint_key = (self.current_user_id, self.current_session_id)
+        after_id = self._last_extracted_message_id_by_session.get(checkpoint_key, 0)
+        return self.store.has_messages(self.current_session_id, self.current_user_id, after_id=after_id)
 
     def memory_add(
         self,
@@ -224,10 +236,16 @@ class CUREMemorySystem:
             # be destroyed by the more abstract one.
             active = [item for item in active if item.project_id is None]
         if active and active[0].value == memory.value and active[0].review_status == memory.review_status:
-            # The identical-content no-op deliberately spans layers: the same
-            # value is already persisted and visible to the candidate's whole
-            # lattice, so nothing new is stored whichever layer the matching
-            # row belongs to (a second copy would only double the recall line).
+            # The identical-content no-op fires only when the matching row
+            # covers the candidate's whole lattice: a repo-bound candidate
+            # no-ops against an identical GENERAL row (visible to every
+            # repository, its own included — a duplicate repo-bound copy
+            # would only double the recall line). The mirror direction never
+            # reaches here: the layer guard above already stripped repo-bound
+            # rows for a general candidate, and an identical repo-bound row
+            # must not absorb it — that row is invisible to the other
+            # repositories the general lesson is meant for, so the general
+            # row is stored (within that one repo both then render).
             return active[0]
         if memory.project_id is not None:
             # The mirror guard: a repo-bound candidate supersedes only its own

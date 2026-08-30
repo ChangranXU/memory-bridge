@@ -217,9 +217,13 @@ Cross-checks that should hold:
   cannot supersede a general row either — the general layer is shared
   run-wide, so one repo's refinement must not destroy it for every other repo
   (the two coexist; the repo-bound row overlays the general one in that
-  repo's recall). The identical-content dedupe no-op still spans layers — the
-  same value is already persisted and visible, so nothing new is stored
-  either way; the audit replay (`_first_active_row`) mirrors that no-op
+  repo's recall). The identical-content dedupe no-op spans layers in that
+  same lattice-covering direction only: a repo-bound candidate no-ops
+  against an identical general row (already visible to its whole lattice),
+  while a general candidate never no-ops against a repo-bound row — that
+  row is invisible to the other repositories the general lesson is meant
+  for, so the general row is stored (within that one repo both rows then
+  render); the audit replay (`_first_active_row`) mirrors that no-op
   predicate exactly. Deletions get the same layer treatment: a deletion
   decision may carry an optional `scope` and stays in the session's own layer
   without one — a repo episode's forget removes only that repo's matching

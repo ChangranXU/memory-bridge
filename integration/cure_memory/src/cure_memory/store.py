@@ -74,15 +74,37 @@ class SQLiteMemoryStore:
         if self._atomic_depth == 0:
             self.conn.commit()
 
+    def _write(self, sql: str, params: tuple) -> sqlite3.Cursor:
+        """One DML statement under the store's commit discipline.
+
+        A failed execute outside atomic() leaves sqlite's implicit transaction
+        open, and the next atomic()'s explicit BEGIN then fails with "cannot
+        start a transaction within a transaction" — every later extraction
+        erroring with the wrong root cause until some write commits. Roll the
+        implicit transaction back at the point of failure instead. Inside
+        atomic() the block's own except performs the rollback.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, params)
+        except BaseException:
+            if self._atomic_depth == 0:
+                self.conn.rollback()
+            raise
+        self._commit()
+        return cursor
+
     @contextmanager
     def atomic(self):
         """One all-or-nothing unit over multiple save/update calls.
 
-        The write paths that supersede one row pair with a successor
-        (system.py ``memory_replace`` / ``_upsert_memory``) issue two commits;
-        a crash between them would persist half the pair — the replacement
-        live while the old row stays approved (two live rows for one key), or
-        the old row superseded with no successor saved. Inside this block the
+        The multi-write paths (system.py ``memory_replace`` /
+        ``_upsert_memory`` supersede sequences, the extraction deletion
+        batch) would otherwise issue one commit per row; a crash between
+        them would persist half the unit — the replacement live while the
+        old row stays approved (two live rows for one key), the old row
+        superseded with no successor saved, or half a deletion batch with
+        the extraction checkpoint held for the retry. Inside this block the
         per-call commits become no-ops and the unit commits once at the end,
         rolling back on any error. Nested blocks join the outer one (no
         current caller nests).
@@ -103,8 +125,7 @@ class SQLiteMemoryStore:
             self._atomic_depth -= 1
 
     def save_message(self, message: SessionMessage) -> int:
-        cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor = self._write("""
             INSERT INTO session_messages (
                 session_id, user_id, role, content, created_at, metadata
             ) VALUES (?, ?, ?, ?, ?, ?)
@@ -117,31 +138,31 @@ class SQLiteMemoryStore:
             json.dumps(message.metadata),
         ))
         message.id = cursor.lastrowid
-        self._commit()
         return message.id
 
-    def has_messages(self, session_id: str, after_id: int = 0) -> bool:
+    def has_messages(self, session_id: str, user_id: str, after_id: int = 0) -> bool:
         """Cheap existence probe (LIMIT 1) for the extraction readiness guard —
-        no row materialization, unlike ``list_messages``."""
+        no row materialization, unlike ``list_messages``. The user filter is
+        the isolation boundary: one user's probe must never see (or be starved
+        by) another user's messages under a shared session id."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT 1 FROM session_messages WHERE session_id = ? AND id > ? LIMIT 1",
-            (session_id, after_id),
+            "SELECT 1 FROM session_messages WHERE session_id = ? AND user_id = ? AND id > ? LIMIT 1",
+            (session_id, user_id, after_id),
         )
         return cursor.fetchone() is not None
 
-    def list_messages(self, session_id: str, after_id: int = 0) -> List[SessionMessage]:
+    def list_messages(self, session_id: str, user_id: str, after_id: int = 0) -> List[SessionMessage]:
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT * FROM session_messages
-            WHERE session_id = ? AND id > ?
+            WHERE session_id = ? AND user_id = ? AND id > ?
             ORDER BY id ASC
-        """, (session_id, after_id))
+        """, (session_id, user_id, after_id))
         return [self._row_to_message(row) for row in cursor.fetchall()]
 
     def save_memory(self, memory: Memory) -> int:
-        cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor = self._write("""
             INSERT INTO memories (
                 user_id, project_id, scope, memory_type, key, value, description,
                 confidence, review_status, source_type, sources, evidence,
@@ -150,15 +171,13 @@ class SQLiteMemoryStore:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, self._memory_values(memory))
         memory.id = cursor.lastrowid
-        self._commit()
         return memory.id
 
     def update_memory(self, memory: Memory) -> None:
         if memory.id is None:
             raise ValueError("Cannot update memory without id")
         memory.updated_at = datetime.now().isoformat()
-        cursor = self.conn.cursor()
-        cursor.execute("""
+        self._write("""
             UPDATE memories
             SET user_id = ?, project_id = ?, scope = ?, memory_type = ?,
                 key = ?, value = ?, description = ?, confidence = ?,
@@ -168,7 +187,6 @@ class SQLiteMemoryStore:
                 metadata = ?
             WHERE id = ?
         """, (*self._memory_values(memory), memory.id))
-        self._commit()
 
     def list_memories(
         self,

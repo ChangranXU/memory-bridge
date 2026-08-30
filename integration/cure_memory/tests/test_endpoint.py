@@ -105,6 +105,32 @@ def test_add_with_infer_dedupe_reports_the_existing_row(endpoint_and_client):
     assert [hit.id for hit in hits] == retry.memory_ids
 
 
+def test_shared_session_id_still_isolates_extraction_per_user(endpoint_and_client):
+    """user_id stays the sole isolation boundary even when two users reuse one
+    session id: B's extraction must not ingest A's un-extracted messages (the
+    message listing is user-scoped), and B's extraction must not advance the
+    checkpoint past A's tail (the checkpoint is keyed per (user_id, session_id)),
+    so A's messages stay extractable for A afterwards."""
+    endpoint, client = endpoint_and_client
+    # Alice leaves an un-extracted tail under session "s": her extraction
+    # fails (the 500 path), so the recorded messages stay past the checkpoint.
+    client.queue.append("empty_content")  # scripted last_error on the decision client
+    with pytest.raises(MemoryEndpointError):
+        _add(endpoint, ["ALICE PRIVATE CONTEXT note"], user_id="alice", session_id="s", infer=True)
+    # Bob adds under the SAME session id with infer=true: only his own message
+    # may reach the extraction request.
+    client.queue.append({"candidates": [], "deletions": [], "rejections": []})
+    _add(endpoint, ["bob message"], user_id="bob", session_id="s", infer=True)
+    (request,) = client.requests[1:]
+    assert [message["content"] for message in request["messages"]] == ["bob message"]
+    # Alice's tail was not swallowed by bob's checkpoint: her next extraction
+    # still sees it, and sees none of bob's.
+    client.queue.append({"candidates": [], "deletions": [], "rejections": []})
+    _add(endpoint, ["alice follow-up"], user_id="alice", session_id="s", infer=True)
+    contents = [message["content"] for message in client.requests[2]["messages"]]
+    assert contents == ["ALICE PRIVATE CONTEXT note", "alice follow-up"]
+
+
 def test_verbatim_add_with_metadata_answers_400(endpoint_and_client):
     """Verbatim rows carry no arbitrary metadata: silently dropping the
     request's metadata would claim a write not fully made (the update path's

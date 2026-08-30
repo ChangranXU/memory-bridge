@@ -136,7 +136,17 @@ class CUREMemorySystem:
         confidence: float = 0.95,
     ) -> Memory:
         all_memories = self.store.list_memories(user_id=user_id, review_status=None)
-        old = next((memory for memory in all_memories if memory.id == memory_id), None)
+        # Terminal rows are never re-matched: replacing a deleted (or already
+        # superseded) row would resurrect its content as a fresh approved row
+        # and overwrite the old row's history marker, so they read as missing.
+        old = next(
+            (
+                memory
+                for memory in all_memories
+                if memory.id == memory_id and memory.review_status not in INACTIVE_REVIEW_STATUSES
+            ),
+            None,
+        )
         if old is None:
             raise ValueError(f"Memory not found: {memory_id}")
         replacement = Memory(

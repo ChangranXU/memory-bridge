@@ -6,6 +6,9 @@ Maps the shared add/search/update/delete actions onto a ``CUREMemorySystem``:
   the messages, and — with ``infer=true`` — runs CURE's extraction pipeline;
   ``infer=false`` stores each message verbatim as its own approved memory row.
   The response returns only after the rows are persisted and searchable.
+  A session-less add (``session_id`` omitted) always mints a fresh session and
+  the response carries the MINTED id, not the request's — the one deliberate
+  deviation from the contract's byte-for-byte echo rule.
 - ``search`` runs CURE's approved-memory search inside the exact ``user_id``
   scope (the sole retrieval-isolation boundary).
 - ``update`` replaces a row's value via CURE's supersede-by-replace rule;
@@ -13,7 +16,9 @@ Maps the shared add/search/update/delete actions onto a ``CUREMemorySystem``:
 - ``delete`` marks the row ``deleted``, addressed by id.
 
 CURE memory ids are integer row ids, so endpoint-side ``memory_id`` strings
-must parse as integers; anything else is a 400, a missing row a 404.
+must parse as integers; anything else is a 400, and a missing or terminal
+(``deleted``/``superseded``/…) row a 404 — terminal rows are never
+re-matched, so one logical deletion counts once and history markers survive.
 """
 
 import logging
@@ -31,7 +36,7 @@ from shared_bridge.endpoint import (
     UpdateResponse,
 )
 
-from cure_memory.models import Memory
+from cure_memory.models import INACTIVE_REVIEW_STATUSES, Memory
 from cure_memory.system import CUREMemorySystem
 
 logger = logging.getLogger("cure_memory_bridge.endpoint")
@@ -98,7 +103,9 @@ class CureMemoryEndpoint(MemoryEndpoint):
             (m for m in store.list_memories(user_id or self._default_user_id, review_status=None) if m.id == row_id),
             None,
         )
-        if row is None or row.review_status == "deleted":
+        if row is None or row.review_status in INACTIVE_REVIEW_STATUSES:
+            # Terminal rows (deleted/superseded/...) are never re-matched:
+            # one logical deletion counts once and history markers survive.
             raise MemoryEndpointError(404, f"memory not found: {memory_id}")
         row.review_status = "deleted"
         store.update_memory(row)

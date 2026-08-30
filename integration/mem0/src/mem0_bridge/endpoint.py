@@ -118,7 +118,11 @@ class Mem0Endpoint(MemoryEndpoint):
 
     @staticmethod
     def _status(error: Mem0ApiError) -> int:
-        return 404 if error.status_code == 404 else 500
+        # The store layer deliberately preserves a 400 (the engine rejecting
+        # the request itself, e.g. library mode's "no text content to
+        # update"): pass it through as the contract's caller bug instead of
+        # collapsing it into an integration-failure 500.
+        return error.status_code if error.status_code in (400, 404) else 500
 
     @staticmethod
     def _record(hit: dict) -> MemoryRecord:

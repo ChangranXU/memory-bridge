@@ -291,9 +291,11 @@ class TencentDBBackend(BaseMemoryBackend):
         for key in ("memory", "pipeline", "l1IdleTimeoutSeconds"):
             value = value.get(key) if isinstance(value, dict) else None
         # bool first: isinstance(True, int) is True, and True is not a timeout.
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # Negative either: it would pass here and detonate at the finalize
+        # drain's sleep — a loud start failure beats a late ValueError.
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise _BackendUnavailable(
-                f"missing or non-numeric memory.pipeline.l1IdleTimeoutSeconds in the gateway yaml at {path}"
+                f"missing, non-numeric, or negative memory.pipeline.l1IdleTimeoutSeconds in the gateway yaml at {path}"
             )
         return float(value)
 

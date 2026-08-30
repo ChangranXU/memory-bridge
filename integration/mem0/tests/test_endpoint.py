@@ -10,6 +10,7 @@ from shared_bridge.endpoint import (
 )
 
 from tests.conftest import FakeMem0Store  # noqa: F401  (documents the scripted seam)
+from mem0_bridge.client import Mem0ApiError
 from mem0_bridge.endpoint import Mem0Endpoint
 
 
@@ -96,6 +97,22 @@ def test_update_unknown_id_404(endpoint):
     with pytest.raises(MemoryEndpointError) as excinfo:
         endpoint.update("missing", UpdateRequest(text="x"), user_id="alice")
     assert excinfo.value.status_code == 404
+
+
+def test_update_store_rejection_keeps_its_400(endpoint, fake_client, monkeypatch):
+    """The store layer deliberately preserves an engine 400 (the request
+    itself rejected, e.g. library mode's "no text content to update"): the
+    endpoint passes it through as the contract's caller bug, never a 500."""
+    endpoint.add(AddRequest(messages=[Message(role="user", content="old")], user_id="alice"))
+    memory_id = next(iter(fake_client.memories))
+
+    def reject(*args, **kwargs):
+        raise Mem0ApiError(400, "memory has no text content to update")
+
+    monkeypatch.setattr(fake_client, "update", reject)
+    with pytest.raises(MemoryEndpointError) as excinfo:
+        endpoint.update(memory_id, UpdateRequest(text="new"), user_id="alice")
+    assert excinfo.value.status_code == 400
 
 
 def test_update_foreign_user_looks_like_unknown(endpoint, fake_client):

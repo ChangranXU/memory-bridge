@@ -31,6 +31,7 @@ class FakeSystem:
         self.dump_rows: list[dict] = []
         self.store_error: Exception | None = None
         self.extract_error: Exception | None = None
+        self.extract_soft_error: str | None = None
         self.search_error: Exception | None = None
         self.dump_error: Exception | None = None
         self.close_error: Exception | None = None
@@ -129,6 +130,19 @@ class FakeBackend(BaseMemoryBackend):
             except Exception:
                 logger.exception("annotation generation-end failed; extraction continues untraced")
             raise error  # hard failure: the shell counts/registers/gates
+        if self.system.extract_soft_error is not None:
+            # Soft failure (the CURE shape): no rows written, the checkpoint
+            # held (pending kept); the error is counted and registered with no
+            # event duplicate, never raised — and the traced operation still
+            # closes with the native soft-error list.
+            soft_error = self.system.extract_soft_error
+            self._counts["extraction_errors"] += 1
+            self._register_extraction_failure(step, soft_error, log_event=False)
+            try:
+                self._generation_finish(operation, step, [], [soft_error])
+            except Exception:
+                logger.exception("annotation generation-end failed; extraction continues untraced")
+            return
         new_rows = [message["content"] for message in self.system.pending]
         self.system.rows.extend(new_rows)
         self.system.pending.clear()

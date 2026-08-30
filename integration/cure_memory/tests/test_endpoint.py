@@ -135,6 +135,30 @@ def test_delete_removes_the_row_from_search(endpoint_and_client):
     assert gone.value.status_code == 404
 
 
+def test_terminal_rows_are_never_rematched(endpoint_and_client):
+    endpoint, _ = endpoint_and_client
+    (memory_id,) = _add(endpoint, ["doomed fact"]).memory_ids
+    endpoint.delete(memory_id, user_id="alice")
+    # An update against the deleted row is a 404 — not a resurrection of the
+    # deleted content as a fresh approved row, and the marker survives.
+    with pytest.raises(MemoryEndpointError) as excinfo:
+        endpoint.update(memory_id, UpdateRequest(text="zombie"), user_id="alice")
+    assert excinfo.value.status_code == 404
+    rows = endpoint._system.store.list_memories("alice", review_status=None)
+    assert [row.review_status for row in rows] == ["deleted"]
+    assert endpoint.search(SearchRequest(query="doomed", user_id="alice")).data == []
+
+    # A superseded row is terminal too: delete must not rewrite its marker.
+    (old_id,) = _add(endpoint, ["old text"], request_id="req-2").memory_ids
+    new_id = endpoint.update(old_id, UpdateRequest(text="new text"), user_id="alice").memory.id
+    with pytest.raises(MemoryEndpointError) as superseded:
+        endpoint.delete(old_id, user_id="alice")
+    assert superseded.value.status_code == 404
+    by_id = {row.id: row.review_status for row in endpoint._system.store.list_memories("alice", review_status=None)}
+    assert by_id[int(old_id)] == "superseded"
+    assert by_id[int(new_id)] == "approved"
+
+
 def test_http_round_trip_via_serve_in_thread(tmp_path):
     """The sqlite store is thread-affine: serve_in_thread both constructs and
     uses the endpoint on the one serving thread."""

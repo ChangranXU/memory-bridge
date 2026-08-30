@@ -102,8 +102,9 @@ class TencentDBEndpoint(MemoryEndpoint):
         # so a smaller budget reports a 500 for a write that already persisted
         # (and a caller retry would re-feed the pipeline wholesale). One add
         # can chain several cycles (upstream consumes at most
-        # _L1_CYCLE_ROWS L0 rows per cycle), and each wait gets the full
-        # budget — the arm's per-tick/finalize budget split in miniature.
+        # _L1_CYCLE_ROWS L0 rows per cycle): the first drain wait gets the full
+        # budget PER chained full cycle, the tail wait a fresh single one —
+        # the arm's per-tick/finalize budget split in miniature.
         drain_budget: float = 300.0,
         drain_interval: float = 1.0,
         add_timeout: float = 300.0,
@@ -198,14 +199,20 @@ class TencentDBEndpoint(MemoryEndpoint):
     def _drain(self, n_messages: int) -> None:
         """Wait for this add's L1 work to land. The threshold-triggered task
         is enqueued before conversation/add returns and the status's
-        ``idle = queued==0 && running==0`` covers queued work, so one wait
-        suffices for an add consumed in a single cycle (<= _L1_CYCLE_ROWS
-        messages). A larger add can end a cycle with a 1-9-row tail that
-        upstream defers to the L1 idle timer — invisible to the status poll
-        — so mirror the arm's finalize drain: wait out the armed timer, then
-        drain the timer-fired tail with a fresh budget."""
-        if not self._client.wait_l1_idle(self._drain_budget, self._drain_interval):
-            raise MemoryEndpointError(500, f"tencentdb add failed: L1 did not settle within {self._drain_budget:.0f}s")
+        ``idle = queued==0 && running==0`` covers queued work. The first wait
+        must absorb EVERY chained full cycle (upstream consumes at most
+        _L1_CYCLE_ROWS L0 rows per cycle, and the per-cycle budget dominates
+        one cycle), so its budget scales with the full-cycle count — a flat
+        one-cycle budget against a multi-cycle add under a slow extraction
+        lane would 500 a write that already persisted. A larger add can also
+        end a cycle with a 1-9-row tail that upstream defers to the L1 idle
+        timer — invisible to the status poll — so mirror the arm's finalize
+        drain: wait out the armed timer, then drain the timer-fired tail with
+        a fresh budget."""
+        full_cycles = max(1, n_messages // _L1_CYCLE_ROWS)
+        first_budget = self._drain_budget * full_cycles
+        if not self._client.wait_l1_idle(first_budget, self._drain_interval):
+            raise MemoryEndpointError(500, f"tencentdb add failed: L1 did not settle within {first_budget:.0f}s")
         if n_messages > _L1_CYCLE_ROWS:
             self._sleep(self._l1_idle_timeout + IDLE_WAIT_MARGIN_SECONDS)
             if not self._client.wait_l1_idle(self._drain_budget, self._drain_interval):

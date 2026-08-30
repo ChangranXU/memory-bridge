@@ -632,6 +632,27 @@ def test_extract_ticks_mark_dirty_on_every_counted_call(tmp_path):
     assert backend.system.search_calls == 3  # the failed tick's mark forced a re-search
 
 
+def test_soft_failed_extract_tick_marks_dirty(tmp_path):
+    backend = _started(tmp_path, extract_every_n_steps=1)
+    backend.set_task("t")
+    backend.system.hits = ["one"]
+    backend.recall_context()
+    assert backend._search_dirty is False
+
+    # A counted tick that fails SOFT (an error result, no exception — the
+    # integration counted and registered it itself) may still have written
+    # before reporting the error, so the cache is invalidated conservatively,
+    # exactly like the hard-failure path above.
+    backend.record([{"role": "user", "content": "soft note"}], step=1)
+    backend.system.extract_soft_error = "extract soft boom"
+    backend.maybe_extract(2)
+    assert backend._counts["extraction_calls"] == 1
+    assert backend._counts["extraction_errors"] == 1
+    assert backend._search_dirty is True
+    backend.recall_context()
+    assert backend.system.search_calls == 2  # the soft-failed tick forced a re-search
+
+
 def test_empty_result_is_cached_and_a_failed_search_is_not(tmp_path):
     backend = _started(tmp_path)
     backend.set_task("t")

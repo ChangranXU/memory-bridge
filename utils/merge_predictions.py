@@ -35,7 +35,16 @@ def main() -> int:
 
     if not ids_file.exists():
         raise SystemExit(f"missing instance list: {ids_file}")
-    instances = [line.strip() for line in ids_file.read_text().splitlines() if line.strip()]
+    # The ids-file format contract (utils/common.sh read_instance_ids): blank
+    # lines and comments (# ...) are skipped, duplicates dropped
+    # order-preserving — a hand-edited run-root list must gate on the same set
+    # the bash phases ran.
+    instances = []
+    for line in ids_file.read_text().splitlines():
+        instance_id = line.strip()
+        if not instance_id or instance_id.startswith("#") or instance_id in instances:
+            continue
+        instances.append(instance_id)
     combined = {}
     models = set()
     missing = []

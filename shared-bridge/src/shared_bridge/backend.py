@@ -611,7 +611,6 @@ class BaseMemoryBackend(ABC):
         if not self._available:
             return
         calls_before = self._counts["extraction_calls"]
-        errors_before = self._counts["extraction_errors"]
         try:
             self._perform_extraction(step)
         except Exception as e:
@@ -631,15 +630,17 @@ class BaseMemoryBackend(ABC):
                 raise
             return
         # A store write may have changed what the next recall search returns,
-        # so every counted extract tick marks the search cache dirty — failed
-        # ones above, clean ones here. The calls half of the predicate is
-        # load-bearing: both integrations' readiness guards return BEFORE
-        # counting, so an errors-only rule is vacuously true on skipped ticks
-        # and would buy a pointless search per boundary. An attempted, clean
-        # extraction always marks — including an empty-candidate success (the
-        # accepted over-invalidation is ~extraction_calls+1 searches per
-        # episode, exactly the win).
-        if self._counts["extraction_calls"] > calls_before and self._counts["extraction_errors"] == errors_before:
+        # so every counted extract tick marks the search cache dirty — hard
+        # failures in the except above, soft failures and clean ticks here.
+        # The soft-failure half is conservative too: an integration may have
+        # written before reporting its error result, so the cache cannot stay
+        # memoized on errors it cannot see. The calls half of the predicate is
+        # load-bearing: the integrations' readiness guards return BEFORE
+        # counting, so an uncounted skip never marks (a pointless search per
+        # boundary). An attempted tick always marks — including an
+        # empty-candidate success (the accepted over-invalidation is
+        # ~extraction_calls+1 searches per episode, exactly the win).
+        if self._counts["extraction_calls"] > calls_before:
             self._mark_store_changed()
 
     def _mark_store_changed(self) -> None:

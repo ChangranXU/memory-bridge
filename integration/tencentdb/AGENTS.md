@@ -228,9 +228,11 @@
   field), not the drain budget; each drain wait's budget (300 s default)
   dominates one full L1 cycle (the extraction LLM call caps at a hardcoded
   180 s upstream — l1-extractor.ts, independent of the yaml's
-  `llm.timeoutMs` — plus the vector lane's per-memory embeds), so a smaller
-  budget would 500 a write that already persisted. One add is NOT one
-  cycle: upstream consumes at most 10 L0 rows per cycle
+  `llm.timeoutMs` — plus the vector lane's per-memory embeds), and the
+  FIRST wait scales that per-cycle budget by the chained full-cycle count
+  (the status stays non-idle while full cycles chain), so a multi-cycle add
+  under a slow extraction lane doesn't 500 a write that already persisted.
+  One add is NOT one cycle: upstream consumes at most 10 L0 rows per cycle
   (L1_BATCH_PROCESS; the 2N=20 over-fetch is backlog detection), and a
   cycle ending with a 1-9-row tail defers it to the L1 idle timer, which
   /v2/pipeline/status never exposes — so an add over 10 messages drains

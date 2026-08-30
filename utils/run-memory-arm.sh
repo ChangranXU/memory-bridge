@@ -147,7 +147,10 @@ require_mem0_embedding_quartet() {
 # read, no side effect.
 MEM0_MODE=""
 if [ "$INTEGRATION_NAME" = "mem0" ]; then
-  MEM0_MODE="$(read_mem0_mode)"
+  # The || exit 1 is load-bearing: this script runs under set -u only, so a
+  # die inside $(...) would exit just the substitution subshell and the arm
+  # would continue with an empty mode — every mode gate below silently skipped.
+  MEM0_MODE="$(read_mem0_mode)" || exit 1
 fi
 
 # The QUERY lane (the recall-query rewriter) rides the roster proxy as ROLE3;

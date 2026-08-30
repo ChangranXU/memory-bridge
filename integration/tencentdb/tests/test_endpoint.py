@@ -82,6 +82,17 @@ def test_add_over_one_cycle_waits_out_the_idle_timer(endpoint, client, monkeypat
     assert sleeps == [35.0]  # l1_idle_timeout (30) + margin (5)
 
 
+def test_add_multi_cycle_scales_the_first_drain_budget(endpoint, client, monkeypatch):
+    # The first wait must absorb every chained full cycle (25 messages = two
+    # full cycles + a 5-row tail): a flat one-cycle budget could time out
+    # under a slow extraction lane and 500 a write that already persisted.
+    monkeypatch.setattr(TencentDBEndpoint, "_sleep", lambda self, seconds: None)
+    messages = [Message(role="user", content=f"fact number {i}") for i in range(25)]
+    response = endpoint.add(_add(messages=messages))
+    assert response.success is True
+    assert client.drain_budgets == [600.0, 300.0]  # two full cycles, then the tail's fresh budget
+
+
 def test_add_over_one_cycle_tail_settle_failure_maps_500(endpoint, client, monkeypatch):
     monkeypatch.setattr(TencentDBEndpoint, "_sleep", lambda self, seconds: None)
     client.idle_answers = [True, False]  # cycles settle, the timer-fired tail never does

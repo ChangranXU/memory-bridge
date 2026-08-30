@@ -237,9 +237,13 @@ class Annotator:
         """One logical request; never raises, whatever the endpoint does."""
         if self.breaker_open:
             return PostResult(ok=False, skipped=True)
-        body = json.dumps({"events": events}).encode("utf-8")
         started = time.monotonic()
         try:
+            # The serialization rides the guard too: a non-JSON-serializable
+            # event leaf (an integration bug) must degrade to untraced native
+            # work like any transport failure, never escape the "never raises"
+            # contract into a caller that would misclassify it.
+            body = json.dumps({"events": events}).encode("utf-8")
             result = self._attempt_loop(url, body)
         except Exception as error:
             # No exc_info: exception strings can embed the request URL, which

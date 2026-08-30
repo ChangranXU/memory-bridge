@@ -111,6 +111,17 @@ def test_start_fails_loudly_on_a_non_numeric_idle_timeout(make_backend, gateway_
     assert errors and "l1IdleTimeoutSeconds" in errors[0]["error"]
 
 
+def test_start_fails_loudly_on_a_negative_idle_timeout(make_backend, gateway_yaml):
+    # A negative value is numeric but not a timeout: left through, it would
+    # detonate at the finalize drain's sleep instead of failing the start.
+    gateway_yaml.write_text("memory:\n  pipeline:\n    l1IdleTimeoutSeconds: -30\n")
+    backend = make_backend()
+    backend.start()
+    assert backend._available is False
+    errors = [event for event in backend._events if event["kind"] == "error" and event.get("op") == "start"]
+    assert errors and "l1IdleTimeoutSeconds" in errors[0]["error"]
+
+
 def test_start_idle_timeout_resolution_raises_under_strict(make_backend, tmp_path):
     """The yaml failures fail the start under strict too (loud in both modes —
     contained unavailable non-strict, raised strict)."""

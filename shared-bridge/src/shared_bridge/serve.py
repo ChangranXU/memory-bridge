@@ -88,7 +88,10 @@ def make_handler(endpoint: MemoryEndpoint) -> type[BaseHTTPRequestHandler]:
                     # Percent-decode: the id segment is URL-encoded on the wire
                     # (an encoded slash decodes to "/" and misses the route).
                     memory_id = unquote(path[len("/v1/memories/") :]).strip("/")
-                    if not memory_id or "/" in memory_id:
+                    # "search" is the POST search route's reserved segment, never
+                    # an id: a PUT/DELETE to that shape is an unknown route, not
+                    # an update/delete on a memory named "search".
+                    if not memory_id or "/" in memory_id or memory_id == "search":
                         self._error(404, f"unknown route: {method} {path}")
                     elif method == "PUT":
                         self._send(200, endpoint.update(memory_id, self._body(UpdateRequest)).model_dump())

@@ -208,6 +208,23 @@ def test_http_memory_id_is_percent_decoded(base_url):
     assert status == 404
 
 
+def test_http_search_segment_is_not_a_memory_id(base_url):
+    """The POST search route's reserved "search" segment is never an id: a
+    PUT/DELETE to that shape is an unknown route (404 naming the route), not
+    an update/delete dispatched on a memory literally named "search" (which
+    would 404 naming the id — or worse, hit a store holding such an id)."""
+    for method in ("PUT", "DELETE"):
+        for path in ("/v1/memories/search", "/v1/memories/search/", "/v1/memories/%73earch"):
+            status, body = _request(base_url, method, path, {"text": "x"} if method == "PUT" else None)
+            assert status == 404
+            assert "unknown route" in body["detail"]["reason"], (method, path, body)
+    # The search route itself and a real id are unaffected.
+    status, _ = _request(base_url, "POST", "/v1/memories/search/", {"query": "q", "user_id": "u"})
+    assert status == 200
+    status, body = _request(base_url, "PUT", "/v1/memories/searchable", {"text": "x"})
+    assert status == 404 and "memory not found" in body["detail"]["reason"]
+
+
 def test_serve_in_thread_reraises_the_real_startup_error(base_url):
     # The port is already bound by the base_url fixture server: the underlying
     # OSError must surface immediately, not a 5s wait and a generic message.

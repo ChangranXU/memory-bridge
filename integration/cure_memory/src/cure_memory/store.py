@@ -4,6 +4,7 @@ SQLite persistence for the CURE Memory product.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
 import json
 import sqlite3
@@ -17,6 +18,7 @@ class SQLiteMemoryStore:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
+        self._atomic_depth = 0
         self._create_tables()
 
     def _create_tables(self) -> None:
@@ -66,6 +68,40 @@ class SQLiteMemoryStore:
         """)
         self.conn.commit()
 
+    def _commit(self) -> None:
+        # Inside an atomic() block the per-write commit is deferred to the
+        # block's single commit, so a multi-write sequence stays all-or-nothing.
+        if self._atomic_depth == 0:
+            self.conn.commit()
+
+    @contextmanager
+    def atomic(self):
+        """One all-or-nothing unit over multiple save/update calls.
+
+        The write paths that supersede one row pair with a successor
+        (system.py ``memory_replace`` / ``_upsert_memory``) issue two commits;
+        a crash between them would persist half the pair — the replacement
+        live while the old row stays approved (two live rows for one key), or
+        the old row superseded with no successor saved. Inside this block the
+        per-call commits become no-ops and the unit commits once at the end,
+        rolling back on any error. Nested blocks join the outer one (no
+        current caller nests).
+        """
+        if self._atomic_depth > 0:
+            yield
+            return
+        self.conn.execute("BEGIN")
+        self._atomic_depth += 1
+        try:
+            yield
+        except BaseException:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
+        finally:
+            self._atomic_depth -= 1
+
     def save_message(self, message: SessionMessage) -> int:
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -81,7 +117,7 @@ class SQLiteMemoryStore:
             json.dumps(message.metadata),
         ))
         message.id = cursor.lastrowid
-        self.conn.commit()
+        self._commit()
         return message.id
 
     def has_messages(self, session_id: str, after_id: int = 0) -> bool:
@@ -114,7 +150,7 @@ class SQLiteMemoryStore:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, self._memory_values(memory))
         memory.id = cursor.lastrowid
-        self.conn.commit()
+        self._commit()
         return memory.id
 
     def update_memory(self, memory: Memory) -> None:
@@ -132,7 +168,7 @@ class SQLiteMemoryStore:
                 metadata = ?
             WHERE id = ?
         """, (*self._memory_values(memory), memory.id))
-        self.conn.commit()
+        self._commit()
 
     def list_memories(
         self,

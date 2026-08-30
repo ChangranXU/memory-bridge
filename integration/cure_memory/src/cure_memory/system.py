@@ -165,9 +165,12 @@ class CUREMemorySystem:
             supersedes=[old.id],
         )
         old.review_status = "superseded"
-        self.store.save_memory(replacement)
-        old.superseded_by = replacement.id
-        self.store.update_memory(old)
+        # One atomic unit: a crash between the two writes must not persist the
+        # replacement while the old row stays approved (two live rows, one key).
+        with self.store.atomic():
+            self.store.save_memory(replacement)
+            old.superseded_by = replacement.id
+            self.store.update_memory(old)
         return replacement
 
     def memory_search(
@@ -233,15 +236,19 @@ class CUREMemorySystem:
             # them run-wide; the new repo-bound row coexists with the general
             # one and overlays it in that repo's recall.
             active = [item for item in active if item.project_id == memory.project_id]
-        for item in active:
-            item.review_status = "superseded"
-            self.store.update_memory(item)
-            if item.id is not None:
-                memory.supersedes.append(item.id)
-        self.store.save_memory(memory)
-        for item in active:
-            item.superseded_by = memory.id
-            self.store.update_memory(item)
+        # One atomic unit per candidate: a crash mid-sequence must not persist
+        # half the supersede — old rows terminal with no successor saved, or
+        # the successor live with the old rows still approved.
+        with self.store.atomic():
+            for item in active:
+                item.review_status = "superseded"
+                self.store.update_memory(item)
+                if item.id is not None:
+                    memory.supersedes.append(item.id)
+            self.store.save_memory(memory)
+            for item in active:
+                item.superseded_by = memory.id
+                self.store.update_memory(item)
         return memory
 
     def _require_session(self) -> None:

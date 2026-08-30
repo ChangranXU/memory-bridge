@@ -32,8 +32,12 @@ def main() -> int:
     args = parser.parse_args()
 
     root: pathlib.Path = args.run_root
+    # The harness report is <model>.<run_id>.json inside local-eval/<run_id>/ —
+    # matching the parent dir's name keeps a stray JSON dropped beside the
+    # reports (a copied older report, scratch notes) from shadowing them.
     reports = sorted(
-        root.glob("local-eval/*/*.json"), key=lambda p: p.stat().st_mtime
+        (p for p in root.glob("local-eval/*/*.json") if p.stem.endswith(f".{p.parent.name}")),
+        key=lambda p: p.stat().st_mtime,
     )
     if not reports:
         raise SystemExit(

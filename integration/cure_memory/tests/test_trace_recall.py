@@ -364,11 +364,17 @@ def test_model_crash_without_proxy_visible_call_posts_no_delivery(
     # The query crashed client-side after n_calls incremented: the lane cursor
     # never advanced, so no delivery posts — a provable "placed" claim bound to
     # an empty interval would record no_call, a structural problem for
-    # retrieval. The recall was still accounted, and delivery tracing stays on.
+    # retrieval. The recall was still accounted (placement is the host-side
+    # fact), delivery tracing stays on, and the suppressed delivery leaves the
+    # annotation-kind marker every other under-recording path leaves.
     assert capture_server.events("memory_delivery") == []
     backend = backend_spy[0]
     assert backend._trace.delivery_enabled is True
     assert backend._counts["recall_injections"] == 1
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_delivery_no_call"]
+    assert record["kind"] == "annotation" and record["op"] == "delivery" and record["step"] == 2
+    data = json.loads((tmp_path / "inst" / "memory.json").read_text())
+    assert len([e for e in data["events"] if e.get("reason") == "annotation_delivery_no_call"]) == 1
 
 
 def test_model_crash_after_call_landed_still_posts_delivery(

@@ -1763,8 +1763,12 @@ class BaseMemoryBackend(ABC):
 
         Both recall counters count here, at delivery: ``recall_injections``
         every placed block, ``recall_cache_hits`` the placed blocks that were
-        served from the dirty-flag cache — a rendered-but-undelivered payload
-        (e.g. a terminal limit preflight) inflates neither.
+        served from the dirty-flag cache — a rendered payload whose query
+        attempted no model call at all (e.g. a terminal limit preflight)
+        inflates neither. A placed block whose attempted call crashed before
+        reaching the lane still counts (placement is the host-side fact); the
+        crash probe only withholds the trajectory delivery, and
+        ``note_undelivered_recall`` marks that divergence.
         """
         try:
             self._log_event(
@@ -1781,6 +1785,15 @@ class BaseMemoryBackend(ABC):
                 self._counts["recall_cache_hits"] += 1
         except Exception:
             logger.exception("memory recall accounting failed")
+
+    def note_undelivered_recall(self, step: int) -> None:
+        """Mark a placed recall block whose delivery the agent's crash probe
+        suppressed (the model call failed client-side before any request
+        reached the lane). The counters keep the host-side placement fact
+        (``note_recall`` already counted it); this marker gives the missing
+        trajectory delivery the same annotation-kind record every other
+        under-recording path leaves."""
+        self._log_event("annotation", op="delivery", step=step, reason="annotation_delivery_no_call")
 
     # ------------------------------------------------------------------
     # Finalize

@@ -202,9 +202,13 @@ class LibraryStore:
         # later Memory over the same run root fails to construct while an
         # earlier client is still alive), and the sqlite history manager
         # keeps a persistent connection. The base nulls the store right
-        # after this returns, so a closed engine is never used again.
-        self._memory.vector_store.client.close()
-        self._memory.db.connection.close()
+        # after this returns, so a closed engine is never used again. The
+        # sqlite close runs even when the qdrant close throws — a half-close
+        # would leak the history connection until GC.
+        try:
+            self._memory.vector_store.client.close()
+        finally:
+            self._memory.db.connection.close()
 
 
 def _maybe_not_found(error: ValueError) -> Mem0ApiError:

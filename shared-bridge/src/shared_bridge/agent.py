@@ -175,6 +175,13 @@ class MemoryAgent(ProgressTrackingAgent):
                             logger.warning(
                                 "memory delivery skipped: the failed model call left no proxy-visible call"
                             )
+                            try:
+                                # The injection stays counted (the block was placed
+                                # and the call attempted); the marker keeps the
+                                # missing trajectory delivery visible in memory.json.
+                                self._mem.note_undelivered_recall(step=self.n_calls)
+                            except Exception:
+                                logger.exception("memory recall accounting failed")
                     if deliver:
                         try:
                             self._mem.deliver_recall(recall, step=self.n_calls, msg_index=msg_index, cursor=cursor)

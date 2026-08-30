@@ -730,6 +730,19 @@ def test_rejected_delivery_disables_with_distinct_reason(traced_backend, capture
     backend.finalize()
 
 
+def test_note_undelivered_recall_marks_the_suppressed_delivery(traced_backend):
+    """The agent's crash probe suppresses the delivery of a placed block whose
+    model call never reached the lane; the marker gives that divergence the
+    same annotation-kind record every other under-recording path leaves."""
+    backend = traced_backend()
+    backend.set_task("fix the bug")
+    backend.note_undelivered_recall(step=2)
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_delivery_no_call"]
+    assert record["kind"] == "annotation" and record["op"] == "delivery" and record["step"] == 2
+    assert backend._trace.delivery_enabled is True  # a per-delivery degradation
+    backend.finalize()
+
+
 # ---------------------------------------------------------------------------
 # Containment on the real machinery
 # ---------------------------------------------------------------------------

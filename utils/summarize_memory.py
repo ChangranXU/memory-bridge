@@ -7,10 +7,10 @@ share, rewrite outcomes, agent-initiated scene reads and conversation
 searches (the tencentdb arm's L2/L0 read observation), the cross-episode
 share of recalled memories from the per-hit origin lists the recall events
 carry, and the annotation-transport degradations the bridge logs (kind ==
-"annotation": dropped/unconfirmed deliveries, unconfirmed searches,
-abandoned operations, a lane or the whole annotation transport disabled
-mid-session). Counters that a memory.json predates are simply omitted
-from its row.
+"annotation": dropped/unconfirmed deliveries, deliveries suppressed by the
+crash probe, unconfirmed searches, abandoned operations, a lane or the whole
+annotation transport disabled mid-session). Counters that a memory.json
+predates are simply omitted from its row.
 
 Usage:
     python summarize_memory.py --run-root PATH

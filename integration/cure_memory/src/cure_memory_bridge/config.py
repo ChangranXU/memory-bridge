@@ -12,7 +12,10 @@ class CureMemoryConfig(MemoryConfig):
     db_path: str = ""  # "" -> derived (see backend); explicit override
     # extraction client ("" -> env EXTRACT_MODEL / EXTRACT_BASE_URL / EXTRACT_API_KEY)
     extract_model: str = ""
-    extract_base_url: str = ""
+    # Hand-set to a lane URL this embeds the bearer trajectory ID, like the
+    # annotate URLs: a credential field (rule 4) — the sanitized form is what
+    # memory.json records.
+    extract_base_url: str = Field(default="", exclude=True, repr=False)
     extract_api_key: str = Field(default="", exclude=True, repr=False)
     # extraction payload (defaults follow CURE's recommendation)
     extract_max_tokens: int = Field(default=1600, gt=0)  # -> client max_completion_tokens

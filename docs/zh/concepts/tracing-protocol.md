@@ -44,7 +44,7 @@ description: Schema-v6 memory_* 标注事件与 lane 接线方式。
 | `memory_delivery` | 每个放置的召回块 | 绑定到精确的 main-lane 调用，附带放置证明 |
 
 {% hint style="warning" %}
-**Delivery 规则：** 模型调用在到达 lane 前客户端失败的召回块**不**记录 delivery。可证明的 `placed` 声明必须绑定真实的调用区间，永远不是对空区间的 `no_call`。
+**Delivery 规则：** 模型调用在到达 lane 前客户端失败的召回块**不**记录 delivery。可证明的 `placed` 声明必须绑定真实的调用区间，永远不是对空区间的 `no_call`；episode 日志会标记该抑制（`annotation_delivery_no_call`）。
 {% endhint %}
 
 ## 记忆身份

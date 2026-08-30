@@ -635,10 +635,11 @@ class TencentDBBackend(BaseMemoryBackend):
     # ------------------------------------------------------------------
     @contextlib.contextmanager
     def _timed(self):
-        """Accrue native-call seconds onto the base's I/O-exemption
+        """Accrue native gateway-call seconds onto the base's I/O-exemption
         accumulator (a plain attribute the base drains through
-        ``consume_annotation_duration``; it times only ``_search`` and the
-        rewrite itself)."""
+        ``consume_annotation_duration``; the base itself wraps only
+        ``_search`` and the rewrite — this integration additionally exempts
+        its blocking add/drain/resolve waits)."""
         started = time.monotonic()
         try:
             yield

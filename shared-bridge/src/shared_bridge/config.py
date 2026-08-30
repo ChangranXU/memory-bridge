@@ -67,7 +67,10 @@ class MemoryConfig(BaseModel):
     # MEMORY_QUERY_API_KEY). The driver fills the env fallbacks from the QUERY
     # proxy lane, so the defaults need no user configuration.
     rewrite_model: str = ""
-    rewrite_base_url: str = ""
+    # Hand-set to a lane URL this embeds the bearer trajectory ID, like the
+    # annotate URLs: a credential field (rule 4) — the sanitized form is what
+    # memory.json records.
+    rewrite_base_url: str = Field(default="", exclude=True, repr=False)
     rewrite_api_key: str = Field(default="", exclude=True, repr=False)
     rewrite_timeout: float = Field(default=20.0, gt=0)
     # 1600, not 200: the default rewriter is the role-1 model, a

@@ -1,5 +1,6 @@
 """T2: config mechanics."""
 
+import hashlib
 import json
 
 import pytest
@@ -199,3 +200,43 @@ def test_secret_api_key_never_serialized(tmp_path, make_agent, make_bash_output,
     serialized = json.dumps(agent.serialize())
     assert SENTINEL not in serialized
     assert "extract_api_key" not in serialized
+
+
+def test_lane_urls_never_serialized(tmp_path, make_agent, make_bash_output, extract_env, fake_client):
+    """A hand-set extract/rewrite base URL embeds the bearer trajectory ID
+    (rule 4, like the annotate URLs): absent from repr, both model_dump modes,
+    and the serialized agent config; memory.json keeps the sanitized form."""
+    from minisweagent.models.test_models import DeterministicToolcallModel
+
+    bearer = "bearer-secret-traj-id"
+    url = f"http://h/EXTRACT/trajectories/{bearer}/v1"
+    cfg = CureMemoryConfig(enabled=True, output_dir=str(tmp_path), extract_base_url=url, rewrite_base_url=url)
+    assert bearer not in repr(cfg)
+    assert bearer not in json.dumps(cfg.model_dump())
+    assert bearer not in json.dumps(cfg.model_dump(mode="json"))
+    assert "extract_base_url" not in cfg.model_dump()
+    assert "rewrite_base_url" not in cfg.model_dump()
+
+    model = DeterministicToolcallModel(
+        outputs=[make_bash_output("s", ["echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\necho done"])]
+    )
+    agent = make_agent(
+        model,
+        memory={
+            "enabled": True,
+            "output_dir": str(tmp_path / "inst"),
+            "scope": "instance",
+            "extract_base_url": url,
+            "rewrite_base_url": url,
+        },
+    )
+    agent.run("task")
+    serialized = json.dumps(agent.serialize())
+    assert bearer not in serialized
+    assert "extract_base_url" not in serialized
+    assert "rewrite_base_url" not in serialized
+    # The artifact keeps the sanitized record instead.
+    data = json.loads((tmp_path / "inst" / "memory.json").read_text())
+    assert bearer not in json.dumps(data)
+    hashed = hashlib.sha256(bearer.encode()).hexdigest()[:16]
+    assert data["settings"]["extract_base_url"] == f"http://h/EXTRACT/trajectories/{hashed}/v1"

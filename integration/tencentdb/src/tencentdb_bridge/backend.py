@@ -742,6 +742,11 @@ class TencentDBBackend(BaseMemoryBackend):
         # Readiness guard before counting: nothing to flush AND no armed
         # timer possible (never added) — an unready tick is not a counted call.
         if not self._pending and not (final and self._added):
+            if final:
+                # Nothing to drain, but the episode's attribution window
+                # opened at start: the drain record still closes it (the
+                # boundary is when the episode stopped waiting).
+                self._record_drain()
             return
         self._counts["extraction_calls"] += 1
         n_messages = len(self._pending)

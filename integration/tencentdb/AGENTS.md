@@ -127,7 +127,9 @@
   `finalize_drain_budget` (600 s in the arm overlay — a chained finalize
   can need two serial L1 cycles plus the idle wait, and each cycle carries
   the vector lane's embed costs) bounding the first drain. A drain record
-  closes the episode's attribution window even when the drain fails.
+  closes the episode's attribution window even when the drain fails — and
+  also when the episode recorded nothing at all (the readiness guard's
+  no-op final still records it).
 - **Recall surface**: L1 scored hits (repo-scoped) + the L3 persona as a
   **prepended score-less pseudo-hit** + the L2 scene index as a header
   section. L0 raw conversation search is agent-initiated (see the

@@ -50,6 +50,16 @@ class ChatGPTMemoryDecisionClient:
         self.last_error: Optional[str] = None
 
     def decide_memory_updates(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """One decision round over the batch.
+
+        The return value alone cannot distinguish "the model decided there is
+        nothing to change" from a failed call: every failure class (transport,
+        HTTP status, decode, wrong envelope, empty completion) returns the
+        all-empty decision with ``last_error`` set. A caller MUST consult
+        ``last_error`` before treating the decision as authoritative —
+        ``BasicMemoryExtractor.extract`` does, which is what holds the
+        extraction checkpoint over the unprocessed batch.
+        """
         raw_response = self._call_chatgpt_api(request)
         if not raw_response:
             return self.empty_decision()
@@ -122,6 +132,7 @@ class ChatGPTMemoryDecisionClient:
                     body = response.read().decode("utf-8", "replace")
                 parsed = json.loads(body)
             except urllib.error.HTTPError as error:
+                error.close()  # release the socket; an unread error body leaks it
                 self.last_error = f"http_{error.code}"
                 if error.code < 500 or attempt >= self.max_retries:
                     return ""

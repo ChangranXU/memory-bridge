@@ -355,6 +355,11 @@ def test_finalize_without_any_adds_is_not_counted(make_backend, fake_client, no_
     backend.finalize()
     assert backend._counts["extraction_calls"] == 0
     assert no_sleep == []
+    # Nothing was ever added, so there is nothing to drain — but the episode's
+    # attribution window opened at start, so the drain record still closes it.
+    sidecar = json.loads(Path(backend.config.run_root, "tdai", "episodes.jsonl").read_text().splitlines()[-1])
+    assert sidecar["event"] == "drain"
+    assert sidecar["session_id"] == backend._session_id
 
 
 def test_chained_finalize_drains_both_waits(make_backend, fake_client, no_sleep):

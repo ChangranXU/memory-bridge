@@ -449,6 +449,33 @@ def test_partial_schema_decision_is_a_valid_empty_decision(tmp_path, monkeypatch
         system.close()
 
 
+def test_http_error_body_is_closed(tmp_path, monkeypatch):
+    """An HTTPError carries an unread response body whose socket stays open
+    unless the error is closed — the same socket-release discipline the other
+    HTTP clients in the bundle already practice. Pin that the extraction
+    client's failure path closes it (and still reports the status)."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    from cure_memory.extractor import ChatGPTMemoryDecisionClient
+
+    body = io.BytesIO(b'{"error": "server overloaded"}')
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            urllib.error.HTTPError("https://extract.invalid/v1/chat/completions", 500, "err", {}, body)
+        ),
+    )
+    client = ChatGPTMemoryDecisionClient(
+        model="m", base_url="https://extract.invalid/v1", api_key="k", max_retries=0
+    )
+    assert client.decide_memory_updates({}) == {"candidates": [], "deletions": [], "rejections": []}
+    assert client.last_error == "http_500"
+    assert body.closed  # the leaked-socket regression: the error body must be closed
+
+
 def test_unconfigured_client_is_offline_safe_and_never_falls_back_to_openai_env(tmp_path, monkeypatch):
     """No constructor/env settings -> empty decision with missing_api_key.
     $OPENAI_API_KEY is deliberately NOT picked up: the fallback chain used to

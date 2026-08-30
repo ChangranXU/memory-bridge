@@ -238,6 +238,20 @@ def test_recall_guards_return_none(tmp_path):
     assert no_task.recall_context() is None
 
 
+def test_recall_blank_query_searches_nothing(tmp_path):
+    """A blank task is not a search query: a native surface may answer one
+    with its whole visible store unranked, so recall fails closed — nothing
+    is injected and no search runs. The dirty flag stays set so a later
+    successful rewrite can still arm a real query (the rewriter's envelope
+    already rejects blank replacements, so only a blank task reaches here)."""
+    backend = _started(tmp_path)
+    backend.set_task("   ")
+    backend.system.hits = ["one", "two"]
+    assert backend.recall_context() is None
+    assert backend.system.search_calls == 0
+    assert backend._search_dirty is True  # never cached: a rewrite can still re-arm recall
+
+
 def test_recall_rank_then_fill_edges(tmp_path):
     empty = _started(tmp_path / "empty")
     empty.set_task("t")

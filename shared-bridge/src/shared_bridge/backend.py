@@ -825,9 +825,12 @@ class BaseMemoryBackend(ABC):
         when it fits the remaining ``max_total_recall_chars`` budget (0 = no
         total bound), truncated to fit when at least
         ``_MIN_TRUNCATED_RECALL_LINE_CHARS`` remain, or skipped when less
-        remains — and the walk CONTINUES in every case, so one oversized
-        memory does not starve the smaller lines ranked below it (a recorded
-        divergence from native's break-on-exhaustion). A ``_hit_budget_exempt``
+        remains — and the walk CONTINUES in every case (a recorded divergence
+        from native's break-on-exhaustion). The anti-starvation half of that
+        divergence covers the SKIP case only: a skipped line leaves the
+        remaining budget to the smaller lines ranked below it, while a line
+        truncated to fit consumes that remainder whole, so the lines below it
+        get nothing. A ``_hit_budget_exempt``
         line delivers in full outside both budgets (the native scope rule:
         the budget governs memory lines only) but still occupies a
         ``max_memories`` slot. The
@@ -851,6 +854,13 @@ class BaseMemoryBackend(ABC):
         if not self._available or self._finalized:
             return None
         if not self.config.inject_recall or self._task is None:
+            return None
+        # A blank query is not a search: a native surface may answer one with
+        # its whole visible store unranked, so recall fails closed — inject
+        # nothing, and leave the dirty flag set so a later successful rewrite
+        # can still arm a real query (the rewriter's own envelope rejects
+        # blank replacements, so only a blank task reaches this guard).
+        if not (self._recall_query() or "").strip():
             return None
         if not self._search_dirty:
             # Clean cache: serve the memoized answer — no search runs, no

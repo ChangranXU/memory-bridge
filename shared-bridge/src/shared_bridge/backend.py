@@ -1116,6 +1116,16 @@ class BaseMemoryBackend(ABC):
             and token.start_accepted
         ):
             self._trace.pending_search = token
+        elif token is not None and not token.disabled and status == "completed" and rendered:
+            # A search that DID deliver could not anchor: its start or end
+            # post did not land, so the trajectory will show neither this
+            # search nor the deliveries citing it while memory.json counts
+            # them — the under-recording the annotation events exist to flag.
+            # (The 413/409 starts that disable the operation log their own
+            # reason and are excluded here.)
+            self._log_event(
+                "annotation", op="search", operation_id=token.operation_id, reason="annotation_search_unconfirmed"
+            )
 
     def _search_finish(self, operation, *, status: str, rendered: list, matched: int, selected: int, error=None) -> PostResult | None:
         """Post memory_search_end with the exact ordered rendered refs.
@@ -1287,6 +1297,13 @@ class BaseMemoryBackend(ABC):
                     timeout=self.config.annotate_timeout,
                     retries=self.config.annotate_retries,
                     max_consecutive_errors=self.config.annotate_max_consecutive_errors,
+                    # The breaker's open transition is the one moment a dead
+                    # transport becomes knowable; without this record a
+                    # transport-dead session would show zero annotation
+                    # events while its trajectory records nothing at all.
+                    on_breaker=lambda: self._log_event(
+                        "annotation", op="transport", reason="annotation_transport_disabled"
+                    ),
                 ),
                 main_url,
                 memory_url,

@@ -19,6 +19,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
@@ -208,11 +209,13 @@ class Annotator:
     request, successes reset the count, and at the configured limit the
     breaker disables annotation I/O for the rest of the trace session —
     required wall-time protection, never a behavior change: native work
-    continues untraced. Monotonic time in annotation I/O accumulates for the
-    agent's wall-time exclusion.
+    continues untraced. The optional ``on_breaker`` callback fires once at
+    that transition so the bridge can record the lane's death. Monotonic
+    time in annotation I/O accumulates for the agent's wall-time exclusion.
     """
 
-    def __init__(self, *, timeout: float, retries: int, max_consecutive_errors: int):
+    def __init__(self, *, timeout: float, retries: int, max_consecutive_errors: int,
+                 on_breaker: Callable[[], None] | None = None):
         if retries < 0 or max_consecutive_errors < 1:
             raise ValueError(
                 f"retries must be >= 0 and max_consecutive_errors >= 1 (got {retries=}, {max_consecutive_errors=})"
@@ -220,6 +223,7 @@ class Annotator:
         self._timeout = timeout
         self._retries = retries
         self._max_consecutive_errors = max_consecutive_errors
+        self._on_breaker = on_breaker
         self._consecutive_failures = 0
         self.breaker_open = False
         self.duration = 0.0
@@ -302,3 +306,8 @@ class Annotator:
                 "annotation I/O is disabled for the rest of this trace session",
                 self._consecutive_failures,
             )
+            if self._on_breaker is not None:
+                # Fires exactly once, at the open transition: the bridge's
+                # memory.json record that everything after this point ran
+                # untraced (the trajectory cannot say it itself).
+                self._on_breaker()

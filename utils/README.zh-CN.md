@@ -22,7 +22,7 @@
 | `merge-predictions.sh` | 校验各实例的 `preds.json` 并合并为 `merged-preds.json`；缺失、为空或不一致时报错终止。 |
 | `run-evaluation.sh` | 使用本地 [SWE-bench](https://github.com/SWE-bench/SWE-bench) Docker 评测框架对合并后的预测评分（不使用 `sb-cli`）。 |
 | `summarize-report.sh` | 输出最新评测报告的计数与实例列表，给出 resolved / unresolved / error 判定。 |
-| `summarize-memory.sh` | 将运行目录下所有 `memory.json` 聚合为按集的表格：存储增量（added/updated/deleted）、注入量（次数/字符数）、搜索缓存命中率、改写结果，以及由逐条来源列表算出的跨集召回占比。只读（无模型调用、无 Docker）。 |
+| `summarize-memory.sh` | 将运行目录下所有 `memory.json` 聚合为按集的表格：存储增量（added/updated/deleted）、注入量（次数/字符数）、搜索缓存命中率、改写结果、由逐条来源列表算出的跨集召回占比，以及注解通道降级计数（非零 = trajectory 记录的内存动作少于 memory.json 所示；在信任 trajectory 衍生数字前先核对两者）。只读（无模型调用、无 Docker）。 |
 | `validate_run.py` | 离线校验单个录制的代理运行目录——保存 `trajectory.jsonl` 与 `run.json` 的 `<ts>-memory-<hash>/` 目录，位于 `<id>/<id>/trajectory/` 之下（任意记忆臂）：事件顺序、代理来源标签、记忆索引可提取性、`run.json` 计数器。用法：`validate_run.py <run-dir>`。 |
 | `common.sh` | 各包装脚本共用的辅助函数：运行目录解析、roster `.env` 加载（`API_KEY`/`BASE_URL` → `OPENAI_*` 映射及模型名前缀处理）、ids 文件读取。 |
 | `merge_predictions.py` / `summarize_report.py` / `summarize_memory.py` | 对应 `.sh` 包装脚本的核心逻辑——请通过包装脚本调用，不要直接运行。 |

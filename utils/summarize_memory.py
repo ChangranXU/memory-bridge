@@ -4,9 +4,13 @@ Read-only: reads the per-instance ``runs/mini-swe-agent/<id>/memory.json``
 episode logs (never trajectories), one row per episode: store delta
 (added/updated/deleted), injections (count/chars), the search cache's hit
 share, rewrite outcomes, agent-initiated scene reads and conversation
-searches (the tencentdb arm's L2/L0 read observation), and the cross-episode
+searches (the tencentdb arm's L2/L0 read observation), the cross-episode
 share of recalled memories from the per-hit origin lists the recall events
-carry. Counters that a memory.json predates are simply omitted from its row.
+carry, and the annotation-transport degradations the bridge logs (kind ==
+"annotation": dropped/unconfirmed deliveries, unconfirmed searches,
+abandoned operations, a lane or the whole annotation transport disabled
+mid-session). Counters that a memory.json predates are simply omitted
+from its row.
 
 Usage:
     python summarize_memory.py --run-root PATH
@@ -22,7 +26,10 @@ def _origins_share(events: list[dict], session_id: str | None) -> tuple[int, int
     """(this-episode, cross-episode, unknown) hit counts over recall events.
 
     An origin equal to the episode's own session id is this-episode; any
-    other recorded origin is cross-episode; a null origin carries no signal.
+    other recorded origin is cross-episode; a null origin carries no signal
+    (the tencentdb arm never emits null: its unresolvable origins arrive as
+    the non-empty sentinel "unknown" and count as cross-episode — the same
+    generic cross-episode suffix the model was shown for them).
     """
     own = cross = unknown = 0
     for event in events:
@@ -61,6 +68,7 @@ def main() -> int:
         "agent l0 searches",
         "l0 search chars",
         "cross-episode%",
+        "ann. degraded",
     )
     rows = []
     for path in logs:
@@ -71,6 +79,13 @@ def main() -> int:
             continue
         counts = data.get("counts") or {}
         events = data.get("events") or []
+        if not isinstance(counts, dict) or not isinstance(events, list) or not all(
+            isinstance(event, dict) for event in events
+        ):
+            # Same discipline as an unreadable file: one malformed log must
+            # skip its row, not abort the whole table.
+            print(f"skipping malformed {path}: counts/events have unexpected shapes", file=sys.stderr)
+            continue
         instance = data.get("instance_id") or path.parent.name
         # added/updated: the hosted arm counts added/updated outright; the
         # local arm's approved count subsumes its superseding updates.
@@ -106,6 +121,16 @@ def main() -> int:
         # emit neither counter.
         l0_searches = counts.get("agent_conversation_searches")
         l0_search_chars = counts.get("conversation_search_chars")
+        # Annotation-transport degradations (kind == "annotation"): every one
+        # means trajectory.jsonl records less than this memory.json does — a
+        # dropped delivery or search leaves no mem-eval-visible trace, so a
+        # nonzero count is the operator's signal to reconcile the two
+        # before trusting trajectory-derived numbers (the count is one-
+        # directional: the degradations the bridge logs, so a dead transport
+        # trips its own event; healthy episodes log none). The count needs
+        # no per-reason semantics (any reason, including a future one, is a
+        # degradation by construction).
+        ann_degraded = sum(1 for event in events if event.get("kind") == "annotation")
         rows.append(
             (
                 instance,
@@ -120,8 +145,14 @@ def main() -> int:
                 "-" if l0_searches is None else str(l0_searches),
                 "-" if l0_search_chars is None else str(l0_search_chars),
                 cross_share,
+                str(ann_degraded),
             )
         )
+
+    if not rows:
+        # Every memory.json was unreadable: same contract as no logs at all —
+        # a bare header plus exit 0 would read as a successful empty summary.
+        raise SystemExit(f"no readable memory.json under {root}/runs/mini-swe-agent (see the skip reasons above)")
 
     widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
     print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(header)))

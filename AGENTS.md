@@ -382,7 +382,8 @@ pure mini-swe-agent code, so it keeps using `mini-swe-agent/`'s own env
   run-wide, repo-bound memories only within their own repository).
   `summarize-memory.sh` aggregates every `memory.json` under a run root into
   a per-episode table (store deltas, injections, cache-hit share, rewrite
-  outcomes, cross-episode recall share from the per-hit origin lists).
+  outcomes, agent-initiated read observation, cross-episode recall share
+  from the per-hit origin lists, annotation-transport degradation count).
 
 # Rules that prevent known failures
 

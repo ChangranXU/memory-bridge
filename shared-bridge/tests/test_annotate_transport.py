@@ -69,6 +69,28 @@ def test_http_error_returns_status_and_closes_the_body():
     assert fp.closed  # the error body is not left leaking the socket
 
 
+def test_breaker_callback_fires_once_at_the_open_transition():
+    """The on_breaker callback is the bridge's memory.json record that the
+    transport died: it fires exactly once, at the transition — not on the
+    failures below the limit nor on the posts skipped after it."""
+    fired = []
+    annotator = Annotator(
+        timeout=1.0, retries=0, max_consecutive_errors=2, on_breaker=lambda: fired.append(1)
+    )
+
+    def refuse(request, timeout):
+        raise OSError("down")
+
+    with mock.patch("urllib.request.urlopen", refuse):
+        annotator.post("http://h/MAIN/trajectories/abc/annotate", [])
+        assert fired == []  # below the limit: no callback
+        annotator.post("http://h/MAIN/trajectories/abc/annotate", [])
+        assert fired == [1]  # the open transition, exactly once
+        annotator.post("http://h/MAIN/trajectories/abc/annotate", [])  # skipped: no I/O, no callback
+        assert fired == [1]
+    assert annotator.breaker_open is True
+
+
 # ---------------------------------------------------------------------------
 # resolve_lane_url: the no-model-URL lane (a lane that carries no model
 # traffic at all resolves from the explicit config/env URL alone — but only

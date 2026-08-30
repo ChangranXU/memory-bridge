@@ -524,6 +524,10 @@ def test_rejected_search_start_anchors_no_delivery(traced_backend, capture_serve
     assert recall is not None and recall["n_memories"] == 1
     assert backend._trace.pending_search is None
     assert backend._trace.memory_lane_enabled is True
+    # The untraceable search is recorded as a degradation: memory.json will
+    # count this recall while the trajectory shows no search for it.
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_search_unconfirmed"]
+    assert record["op"] == "search" and record["operation_id"]
     backend.deliver_recall(recall, step=1, msg_index=0, cursor=0)
     assert capture_server.events("memory_delivery") == []
     backend.finalize()
@@ -544,8 +548,33 @@ def test_rejected_search_end_anchors_no_delivery(traced_backend, capture_server)
     recall = backend.recall_context(planned_step=1)
     assert recall is not None and recall["n_memories"] == 1
     assert backend._trace.pending_search is None
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_search_unconfirmed"]
+    assert record["op"] == "search" and record["operation_id"]
     backend.deliver_recall(recall, step=1, msg_index=0, cursor=0)
     assert capture_server.events("memory_delivery") == []
+    backend.finalize()
+
+
+def test_dead_transport_records_its_degradation(traced_backend, capture_server):
+    """A transport that dies mid-session (breaker open) must not pass
+    silently: memory.json records the transport's death once, and each
+    recall that still ran natively records its unconfirmed search — without
+    these, a transport-dead session shows zero annotation events while its
+    trajectory records nothing after the death."""
+    capture_server.responder = lambda path, events: (
+        202, {"recorded": len(events), "duplicates": 0, "role_call_cursor": 0}
+    )
+    backend = traced_backend(annotate_retries=0, annotate_max_consecutive_errors=1)
+    backend.set_task("fix the bug")  # healthy session opens
+    capture_server.responder = lambda path, events: (500, {"error": "down"})  # the proxy dies
+    backend.system.hits = ["alpha fact"]
+    recall = backend.recall_context(planned_step=1)
+    assert recall is not None and recall["n_memories"] == 1  # native recall unaffected
+    assert backend._trace.annotator.breaker_open is True
+    (transport,) = [e for e in backend._events if e.get("reason") == "annotation_transport_disabled"]
+    assert transport["op"] == "transport"
+    (search,) = [e for e in backend._events if e.get("reason") == "annotation_search_unconfirmed"]
+    assert search["op"] == "search" and search["operation_id"]
     backend.finalize()
 
 

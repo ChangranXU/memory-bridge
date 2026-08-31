@@ -9,7 +9,10 @@ stored under a different ``user_id`` answers 404, exactly like an unknown id.
 
 The search threshold/timeout ride the constructor (resolved from the same
 config the backend reads), never a store-side default: parity between the two
-retrieval surfaces is a constructor contract, pinned in the tests.
+retrieval surfaces is a constructor contract, pinned in the tests. The
+extraction guidelines ride the constructor the same way, so the endpoint's
+infer-adds extract under the arm's policy instead of the engine/project
+default.
 """
 
 from mem0_bridge.client import Mem0ApiError
@@ -37,11 +40,13 @@ class Mem0Endpoint(MemoryEndpoint):
         *,
         search_threshold: float = 0.0,
         search_timeout: float | None = None,
+        extraction_guidelines: str | None = None,
     ):
         self._store = store
         self._default_user_id = default_user_id
         self._search_threshold = search_threshold
         self._search_timeout = search_timeout
+        self._extraction_guidelines = extraction_guidelines
 
     def add(self, request: AddRequest) -> AddResponse:
         try:
@@ -51,6 +56,7 @@ class Mem0Endpoint(MemoryEndpoint):
                 run_id=request.session_id,
                 infer=request.infer,
                 metadata=request.metadata,
+                guidelines=self._extraction_guidelines,
             )
         except Mem0ApiError as e:
             raise MemoryEndpointError(500, f"mem0 add failed: {e.reason}") from e

@@ -153,7 +153,9 @@
   parity — applyRecallBudget governs the memory lines only) and consumes no
   `max_total_recall_chars`, so a profile grown across episodes can no
   longer crowd out a single L1 line; it still occupies one `max_memories`
-  slot (a recorded residual divergence). The L2 scene index rides
+  slot (a recorded residual divergence). Coming from `core/read`, not
+  `atomic/search`, it is also excluded from the search-end
+  `matched_count`/`matched` (`_hit_is_match`) — the count is L1's own. The L2 scene index rides
   the header (`scenario/ls`; `summary` is optional upstream) carrying a
   self-contained curl guide (`host.docker.internal:8420` — the agent's bash
   runs inside the prediction container where 127.0.0.1 is its own loopback),
@@ -179,7 +181,9 @@
   parseable `path` pair, or `/v3/conversation/search` with a parseable
   `query` pair (two separate pending maps, each keyed by `tool_call_id`, so
   a multi-action turn can arm several; a marker-mentioning command without
-  the pair — e.g. grep over the guide text — never arms) and closes each on
+  the pair — e.g. grep over the guide text — never arms; a pair still
+  carrying the guide's literal `<scene-file>` / `<query>` placeholder never
+  arms either — an unreplaced curl is a null read, not a read) and closes each on
   the matching tool observation (id-matching, not next-message — a sibling
   action's observation must not close). Closings bump `agent_scene_reads` /
   `scene_read_chars` resp. `agent_conversation_searches` /

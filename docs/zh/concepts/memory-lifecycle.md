@@ -102,6 +102,7 @@ start → set_task → record* → maybe_extract* → maybe_rewrite* → recall_
 | `_should_store` / `_normalize_role` / `_message_text` | 录制阶段的过滤和规范化。 |
 | `_hit_score(hit)` / `_hit_origin(hit)` | 命中的相关度分数和来源（安全的 `None` 默认值）。 |
 | `_hit_budget_exempt(hit)` | 使命中行在两项字符预算之外完整渲染（该行仍占用一个 `max_memories` 名额）。 |
+| `_hit_is_match(hit)` | 命中是否计入搜索结束的 `matched_count`（默认 `True`；通过命中列表投递的辅助非搜索层——如前置伪命中——不计入）。 |
 | `_snapshot_memory_state` / `_attribute_changes` | 世代变更审计。 |
 | `_stats_extras` / `_memory_json_fields` | 产物扩展。 |
 

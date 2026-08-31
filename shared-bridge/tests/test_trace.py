@@ -448,6 +448,23 @@ def test_floor_dropped_hit_counts_in_matched_count(traced_backend, capture_serve
     backend.finalize()
 
 
+def test_non_match_hits_stay_out_of_matched_count(traced_backend, capture_server, monkeypatch):
+    """A delivered hit the integration declares a non-match (the ``_hit_is_match``
+    hook — e.g. a prepended pseudo-hit read from an auxiliary surface) still
+    renders and returns, but never inflates the native match count."""
+    backend = traced_backend()
+    backend.set_task("fix the bug")
+    backend.system.hits = ["pseudo", "alpha fact"]
+    monkeypatch.setattr(backend, "_hit_is_match", lambda hit: hit != "pseudo")
+    recall = backend.recall_context(planned_step=1)
+    assert recall is not None and recall["n_memories"] == 2
+    (end,) = capture_server.events("memory_search_end")
+    assert end["payload"]["matched_count"] == {"value": 1, "precision": "lower_bound"}
+    assert end["payload"]["extensions"]["fake"]["matched"] == 1
+    assert len(end["payload"]["returned"]) == 2
+    backend.finalize()
+
+
 def test_rewritten_query_is_traced_with_its_source(traced_backend, capture_server):
     """A successful rewrite replaces the recall query; the next search start
     posts the rewritten query with query_source "rewritten"."""
@@ -740,6 +757,19 @@ def test_note_undelivered_recall_marks_the_suppressed_delivery(traced_backend):
     (record,) = [e for e in backend._events if e.get("reason") == "annotation_delivery_no_call"]
     assert record["kind"] == "annotation" and record["op"] == "delivery" and record["step"] == 2
     assert backend._trace.delivery_enabled is True  # a per-delivery degradation
+    backend.finalize()
+
+
+def test_note_undelivered_recall_distinguishes_an_unreadable_probe(traced_backend):
+    """A crash probe whose own lane read failed is not a proven no-call: the
+    marker keeps the two suppression classes apart (the crashed call may be
+    recorded; the delivery was withheld as unverifiable)."""
+    backend = traced_backend()
+    backend.set_task("fix the bug")
+    backend.note_undelivered_recall(step=2, reason="annotation_delivery_probe_unreadable")
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_delivery_probe_unreadable"]
+    assert record["kind"] == "annotation" and record["op"] == "delivery" and record["step"] == 2
+    assert [e for e in backend._events if e.get("reason") == "annotation_delivery_no_call"] == []
     backend.finalize()
 
 

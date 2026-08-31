@@ -292,10 +292,21 @@ EOF
 # be inherited-ignored the way SIGINT is for a shell's background jobs. A
 # missing lsof degrades the sweep to a no-op (the boot then fails as before,
 # with the cause in proxy.log).
+# The claim excludes only memory-bridge drivers, so the listener could be a
+# FOREIGN process (any dev server on 4000): kill only pids whose command line
+# is the recorder's `trajectory` proxy, and die loudly on anything else —
+# killing a stranger's process is worse than a clear early failure.
 sweep_orphan_proxy() {
-  local pids i
+  local pids pid cmd i
   pids="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true)"
   [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    case "$cmd" in
+      *trajectory*) ;;
+      *) die "127.0.0.1:4000 is held by an unrecognized process (pid $pid: ${cmd:-unknown}) — not sweeping it; free the port and re-run" ;;
+    esac
+  done
   log "sweeping orphaned recorder proxy bound to 127.0.0.1:4000 (pid $(echo $pids)) — a previous driver died mid-instance"
   kill $pids 2>/dev/null || true  # word-splitting intended: one pid per word
   for i in $(seq 1 30); do

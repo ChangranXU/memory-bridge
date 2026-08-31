@@ -377,6 +377,37 @@ def test_model_crash_without_proxy_visible_call_posts_no_delivery(
     assert len([e for e in data["events"] if e.get("reason") == "annotation_delivery_no_call"]) == 1
 
 
+def test_model_crash_with_unreadable_probe_records_probe_unreadable(
+    tmp_path, make_agent, make_bash_output, capture_server, fake_client, monkeypatch, backend_spy
+):
+    """The crash probe's own lane read can fail (transport blip): the delivery
+    is still withheld (its interval is unverifiable), but the marker must say
+    probe_unreadable, not no_call — the crashed call may well be recorded."""
+    monkeypatch.setenv("OPENAI_BASE_URL", capture_server.lane_url("MAIN"))
+    _approve_recall_key(fake_client)
+    reads = []
+
+    def responder(path, events):
+        if "/MAIN/" in path and not events:
+            reads.append(1)
+            if len(reads) > 1:  # the post-crash probe read; the pre-placement read succeeded
+                return 500, {"error": "down"}
+        return 202, {"recorded": len(events), "duplicates": 0, "role_call_cursor": capture_server.cursor}
+
+    capture_server.responder = responder
+    model = make_crashing_model(_recall_script(make_bash_output), crash_after=1)
+    agent = make_agent(model, memory=_traced_memory(tmp_path, capture_server), cost_limit=100.0)
+    with pytest.raises(RuntimeError, match="model boom"):
+        agent.run("fix the recall_key bug")
+    assert capture_server.events("memory_delivery") == []
+    backend = backend_spy[0]
+    assert backend._trace.delivery_enabled is True
+    assert backend._counts["recall_injections"] == 1
+    (record,) = [e for e in backend._events if e.get("reason") == "annotation_delivery_probe_unreadable"]
+    assert record["kind"] == "annotation" and record["op"] == "delivery" and record["step"] == 2
+    assert [e for e in backend._events if e.get("reason") == "annotation_delivery_no_call"] == []
+
+
 def test_model_crash_after_call_landed_still_posts_delivery(
     tmp_path, make_agent, make_bash_output, capture_server, fake_client, monkeypatch
 ):

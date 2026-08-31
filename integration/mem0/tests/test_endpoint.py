@@ -49,6 +49,18 @@ def test_search_is_user_scoped_and_capped(endpoint, fake_client):
     assert response.data[0].id in response.data[0].id  # non-empty id echoed from the store
 
 
+def test_add_forwards_the_constructor_extraction_guidelines(fake_client):
+    """Extraction-policy parity with the arm is a constructor contract, like
+    threshold/timeout: infer-adds extract under the given guidelines, never
+    silently under the engine/project default."""
+    endpoint = Mem0Endpoint(fake_client, extraction_guidelines="extract only durable facts")
+    endpoint.add(AddRequest(messages=[Message(role="user", content="I like tea")], user_id="alice", infer=True))
+    assert fake_client.add_calls[0]["guidelines"] == "extract only durable facts"
+    default = Mem0Endpoint(fake_client)
+    default.add(AddRequest(messages=[Message(role="user", content="more tea")], user_id="alice"))
+    assert fake_client.add_calls[1]["guidelines"] is None
+
+
 def test_search_caps_at_top_k(endpoint, fake_client):
     for i in range(5):
         endpoint.add(AddRequest(messages=[Message(role="user", content=f"fact {i}")], user_id="alice"))

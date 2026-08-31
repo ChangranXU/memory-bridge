@@ -44,7 +44,7 @@ An explicit URL that does not match its lane's derived prefix disables tracing f
 | `memory_delivery` | Per placed recall block | Binding to exact main-lane call(s) with placement proof |
 
 {% hint style="warning" %}
-**Delivery rule:** a recall block whose model call failed client-side before any request reached the lane records _no_ delivery. A provable `placed` claim must bind a real call interval, never `no_call` against an empty interval; the episode log marks the suppression (`annotation_delivery_no_call`).
+**Delivery rule:** a recall block whose model call failed client-side before any request reached the lane records _no_ delivery. A provable `placed` claim must bind a real call interval, never `no_call` against an empty interval; the episode log marks the suppression (`annotation_delivery_no_call`, or `annotation_delivery_probe_unreadable` when the post-crash probe read itself failed and the call's landing is unverifiable).
 {% endhint %}
 
 ## Memory identity

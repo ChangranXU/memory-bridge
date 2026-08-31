@@ -102,6 +102,7 @@ Integrations implement the abstract hooks and may override the optional ones. Th
 | `_should_store` / `_normalize_role` / `_message_text` | Record-phase filtering and normalization. |
 | `_hit_score(hit)` / `_hit_origin(hit)` | Relevance score and provenance origin of a hit (safe `None` defaults). |
 | `_hit_budget_exempt(hit)` | Render the hit's line in full outside both char budgets (the line still occupies a `max_memories` slot). |
+| `_hit_is_match(hit)` | Whether the hit counts toward the search-end `matched_count` (default `True`; an auxiliary non-search layer delivered through the hit list — e.g. a prepended pseudo-hit — is excluded). |
 | `_snapshot_memory_state` / `_attribute_changes` | Generation-change audit. |
 | `_stats_extras` / `_memory_json_fields` | Artifact extension. |
 

@@ -187,3 +187,20 @@ def test_persona_ref_in_search_end(traced_backend, capture_server, fake_client):
     assert ref["item_id"] == "persona"
     assert ref["identity_scheme"] == "tencentdb-memorycore-l1-v1"
     backend.finalize()
+
+
+def test_persona_pseudo_hit_is_not_counted_as_a_match(traced_backend, capture_server, fake_client):
+    """The persona is a core/read layer delivered through the hit list, not an
+    atomic/search result: matched_count counts L1 only. A persona-only recall
+    reports matched 0 while still returning (and delivering) the persona."""
+    fake_client.persona = {"content": "Prefers minimal diffs."}
+    fake_client.search_hits = [{"id": "a1", "content": "use pytest -k", "score": 0.033, "created_at": None}]
+    backend = traced_backend()
+    backend.set_task("fix the bug")
+    payload = backend.recall_context(planned_step=1)
+    assert payload is not None and [m["id"] for m in payload["memories"]] == ["persona", "a1"]
+    (end,) = capture_server.events("memory_search_end")
+    assert end["payload"]["matched_count"] == {"value": 1, "precision": "lower_bound"}
+    assert end["payload"]["extensions"]["tencentdb"]["matched"] == 1
+    assert len(end["payload"]["returned"]) == 2  # the persona still delivers
+    backend.finalize()

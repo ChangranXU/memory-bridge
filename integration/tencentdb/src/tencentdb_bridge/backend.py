@@ -610,11 +610,15 @@ class TencentDBBackend(BaseMemoryBackend):
                     continue
                 if _SCENE_READ_MARKER in command:
                     match = _PATH_RE.search(command)
-                    if match:
+                    # The guide's literal "<scene-file>" placeholder is not a
+                    # read: an unreplaced curl gets a gateway error, and a null
+                    # read must not count as agent_scene_reads.
+                    if match and match.group(1) != "<scene-file>":
                         self._pending_reads[tool_call_id] = match.group(1)
                 if _CONVO_SEARCH_MARKER in command:
                     match = _QUERY_RE.search(command)
-                    if match:
+                    # Same placeholder guard for the search guide's "<query>".
+                    if match and match.group(1) != "<query>":
                         self._pending_searches[tool_call_id] = match.group(1)
         elif role == "tool":
             # Id-matching, not next-message-matching: a sibling action's
@@ -873,7 +877,9 @@ class TencentDBBackend(BaseMemoryBackend):
         # hits[:max_memories] in list order with no score sort, so an
         # appended pseudo-hit would be silently dropped whenever the L1 list
         # fills the budget (the persona displaces the lowest-ranked line
-        # instead). Not-yet-generated persona answers 200 with nulls.
+        # instead). Not-yet-generated persona answers 200 with nulls. The
+        # persona comes from core/read, not atomic/search, so _hit_is_match
+        # keeps it out of the search-end matched count (L1's own total).
         persona_first: list[dict] = [self._persona_hit] if self._persona_hit is not None else []
         return persona_first + [hit for hit in l1 if hit.get("id")]
 
@@ -1027,6 +1033,13 @@ class TencentDBBackend(BaseMemoryBackend):
         # longer crowd out L1 lines — the old quarter-share cap's mechanism
         # does not exist anymore.
         return isinstance(hit, dict) and hit.get("id") == _PERSONA_HIT_ID
+
+    def _hit_is_match(self, hit) -> bool:
+        # The persona pseudo-hit rides the hit list for delivery (prepended,
+        # budget-exempt) but comes from core/read, not atomic/search — counting
+        # it would overstate the L1 match total by one on every cycle with a
+        # persona.
+        return not (isinstance(hit, dict) and hit.get("id") == _PERSONA_HIT_ID)
 
     def _hit_score(self, hit: dict) -> float | None:
         if not isinstance(hit, dict):

@@ -883,7 +883,7 @@ class BaseMemoryBackend(ABC):
                 hits = self._search()
             finally:
                 self._io_duration += time.monotonic() - started
-            matched = len(hits)
+            matched = sum(1 for hit in hits if self._hit_is_match(hit))
             floor = self.config.recall_min_score
             if floor is not None:
                 hits = [hit for hit in hits if (score := self._hit_score(hit)) is not None and score >= floor]
@@ -1018,6 +1018,14 @@ class BaseMemoryBackend(ABC):
         does NOT bypass the ``max_memories`` slice: the line still occupies
         one delivered-line slot."""
         return False
+
+    def _hit_is_match(self, hit) -> bool:
+        """Whether the hit counts toward the search-end ``matched_count``
+        (default True). The matched count means "what the native search
+        found"; an integration's auxiliary layers delivered through the hit
+        list (e.g. a prepended pseudo-hit read from a different surface) are
+        delivered hits but not search matches, so it excludes them here."""
+        return True
 
     def _matched_precision(self) -> str:
         """Precision of the search-end ``matched_count``: whether the raw hit
@@ -1786,14 +1794,18 @@ class BaseMemoryBackend(ABC):
         except Exception:
             logger.exception("memory recall accounting failed")
 
-    def note_undelivered_recall(self, step: int) -> None:
+    def note_undelivered_recall(self, step: int, *, reason: str = "annotation_delivery_no_call") -> None:
         """Mark a placed recall block whose delivery the agent's crash probe
-        suppressed (the model call failed client-side before any request
-        reached the lane). The counters keep the host-side placement fact
+        suppressed. The counters keep the host-side placement fact
         (``note_recall`` already counted it); this marker gives the missing
         trajectory delivery the same annotation-kind record every other
-        under-recording path leaves."""
-        self._log_event("annotation", op="delivery", step=step, reason="annotation_delivery_no_call")
+        under-recording path leaves. ``reason`` keeps the two suppression
+        classes distinguishable: ``annotation_delivery_no_call`` (the probe
+        read succeeded — the crashed call provably never reached the lane)
+        versus ``annotation_delivery_probe_unreadable`` (the probe itself
+        failed, so the call may be recorded and the delivery is withheld only
+        because its interval is unverifiable)."""
+        self._log_event("annotation", op="delivery", step=step, reason=reason)
 
     # ------------------------------------------------------------------
     # Finalize

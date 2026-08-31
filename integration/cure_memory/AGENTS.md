@@ -283,9 +283,11 @@ alters native behavior or wall-time preflights; failures degrade to untraced
 native work with a credential-free `memory.json` event
 (`annotation_start_oversize` / `annotation_recovery_conflict` /
 `annotation_change_rejected` / `annotation_delivery_unconfirmed` /
-`annotation_delivery_rejected` / `annotation_delivery_no_call` — the last
-marks a placed block whose crashed model call never reached the lane, so no
-delivery could bind). URLs in
+`annotation_delivery_rejected` / `annotation_delivery_no_call` /
+`annotation_delivery_probe_unreadable` — the last two mark a placed block
+whose crashed model call got no delivery: `no_call` when the probe proved no
+call reached the lane, `probe_unreadable` when the probe itself failed and
+the interval is unverifiable). URLs in
 `memory.json` and logs are sanitized: the bearer trajectory ID appears only
 as the 16-hex `run.json.trajectory_id_hash` prefix.
 

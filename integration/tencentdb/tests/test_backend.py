@@ -1124,6 +1124,35 @@ def test_marker_mention_without_parsed_path_never_arms(make_backend, fake_client
     assert backend._counts["scene_read_chars"] == 0
 
 
+def test_guide_placeholder_commands_never_arm(make_backend, fake_client, scene_read_command, convo_search_command):
+    """Running a guide's curl with the literal placeholder unreplaced
+    (<scene-file> / <query>) is a null read, not an agent-initiated read:
+    no slot arms, so its error observation counts nothing."""
+    backend = make_backend()
+    backend.start()
+    placeholder_read = scene_read_command.replace("scenes/debugging.md", "<scene-file>")
+    placeholder_search = convo_search_command.replace("exact failing command", "<query>")
+    backend.record(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "extra": {
+                    "actions": [
+                        {"command": placeholder_read, "tool_call_id": "call_0"},
+                        {"command": placeholder_search, "tool_call_id": "call_1"},
+                    ]
+                },
+            }
+        ],
+        step=1,
+    )
+    backend.record([_observation("call_0", "scene not found")], step=1)
+    backend.record([_observation("call_1", "No matching conversation messages found.")], step=1)
+    assert backend._counts["agent_scene_reads"] == 0
+    assert backend._counts["agent_conversation_searches"] == 0
+
+
 def test_sibling_observation_does_not_close(make_backend, fake_client, scene_read_command):
     backend = make_backend()
     backend.start()

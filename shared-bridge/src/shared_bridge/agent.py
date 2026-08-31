@@ -172,14 +172,27 @@ class MemoryAgent(ProgressTrackingAgent):
                             advanced = None
                         if advanced is None or advanced <= cursor:
                             deliver = False
+                            # An unreadable probe is NOT a proven no-call: the
+                            # crashed call may be recorded on the lane, and the
+                            # delivery is withheld only because its interval is
+                            # unverifiable. The two classes get distinct reasons
+                            # so memory.json never misstates one as the other.
+                            reason = (
+                                "annotation_delivery_probe_unreadable"
+                                if advanced is None
+                                else "annotation_delivery_no_call"
+                            )
                             logger.warning(
-                                "memory delivery skipped: the failed model call left no proxy-visible call"
+                                "memory delivery skipped: %s",
+                                "the post-failure lane probe was unreadable"
+                                if advanced is None
+                                else "the failed model call left no proxy-visible call",
                             )
                             try:
                                 # The injection stays counted (the block was placed
                                 # and the call attempted); the marker keeps the
                                 # missing trajectory delivery visible in memory.json.
-                                self._mem.note_undelivered_recall(step=self.n_calls)
+                                self._mem.note_undelivered_recall(step=self.n_calls, reason=reason)
                             except Exception:
                                 logger.exception("memory recall accounting failed")
                     if deliver:
